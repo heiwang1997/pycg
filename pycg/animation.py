@@ -93,12 +93,13 @@ class LinearInterpolator(BaseInterpolator):
             return self._keyframes[all_times[0]]
         if t >= all_times[-1]:
             return self._keyframes[all_times[-1]]
+
         nki = np.searchsorted(all_times, t, side='right')
         dt = all_times[nki] - all_times[nki - 1]
 
         alpha = (t - all_times[nki - 1]) / dt
-        prev_value = self._keyframes[nki - 1]
-        next_value = self._keyframes[nki]
+        prev_value = self._keyframes[all_times[nki - 1]]
+        next_value = self._keyframes[all_times[nki]]
         return (1 - alpha) * prev_value + alpha * next_value
 
 
@@ -133,8 +134,8 @@ class LinearQuaternionInterpolator(BaseInterpolator):
         dt = all_times[nki] - all_times[nki - 1]
 
         alpha = (t - all_times[nki - 1]) / dt
-        prev_q = self._keyframes[nki - 1]
-        next_q = self._keyframes[nki]
+        prev_q = self._keyframes[all_times[nki - 1]]
+        next_q = self._keyframes[all_times[nki]]
         return Quaternion.slerp(prev_q, next_q, alpha)
 
 
@@ -314,8 +315,8 @@ class SquadQuaternionInterpolator(BaseInterpolator):
         dt = all_times[nki] - all_times[nki - 1]
         alpha = (t - all_times[nki - 1]) / dt
 
-        prev_kf = self._q_keyframes[all_times[nki - 1]]
-        next_kf = self._q_keyframes[all_times[nki]]
+        prev_kf = self._q_keyframes[nki - 1]
+        next_kf = self._q_keyframes[nki]
 
         qab = Quaternion.slerp(prev_kf.iso, next_kf.iso, alpha)
         qtgt = Quaternion.slerp(prev_kf.tangent, next_kf.tangent, alpha)

@@ -20,7 +20,7 @@ if __name__ == '__main__':
     scene.preview()
 
     # Now we add a camera animation
-    camera_animator = animation.FreePoseAnimator(InterpType.BEZIER)
+    camera_animator = animation.FreePoseAnimator(InterpType.LINEAR)
     pose_1 = Isometry.copy(scene.camera_pose)
     pose_2 = Isometry.copy(pose_1)
     pose_2.t[0] -= 0.1

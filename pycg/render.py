@@ -947,7 +947,7 @@ class Scene:
         engine = gl_engine.engine
 
         t_start, t_end = self.animator.get_range()
-        for t_cur in range(t_start, t_end):
+        for t_cur in range(t_start, t_end + 1):
             self.animator.set_frame(t_cur)
             self._update_gl_engine(gl_engine)
             engine.poll_events()
