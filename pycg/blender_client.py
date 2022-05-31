@@ -109,6 +109,8 @@ def send_entity(geom, uuidx: str = None, pose: Isometry = None, attributes=None)
             triangle_uvs = None
         textures = []
         for t in geom.textures:
+            if t.is_empty():
+                continue
             t = np.asarray(t)
             if t.dtype == np.uint8:
                 t = t.astype(np.float16) / 255.

@@ -58,7 +58,7 @@ class BaseInterpolator:
             return None
         return max(list(self._keyframes.keys()))
 
-    def send_blender(self, uuidx: str, data_path: str, index: int):
+    def send_blender(self, uuidx: str, data_path: str, index: int, negate: bool = False):
         raise NotImplementedError
 
 
@@ -77,8 +77,11 @@ class ConstantInterpolator(BaseInterpolator):
         nki = np.searchsorted(all_times, t, side='right')
         return self._keyframes[all_times[nki - 1]]
 
-    def send_blender(self, uuidx: str, data_path: str, index: int):
-        blender.send_add_animation_fcurve(uuidx, data_path, index, 'constant', self.ordered_keyframes())
+    def send_blender(self, uuidx: str, data_path: str, index: int, negate: bool = False):
+        kf = self.ordered_keyframes()
+        if negate:
+            kf = [(t, -v) for (t, v) in kf]
+        blender.send_add_animation_fcurve(uuidx, data_path, index, 'constant', kf)
 
 
 class LinearInterpolator(BaseInterpolator):
@@ -225,6 +228,21 @@ class BezierInterpolator(BaseInterpolator):
 
         self._precomputed = True
 
+    def visualize(self):
+        if not self._precomputed:
+            self.precompute()
+
+        import matplotlib.pyplot as plt
+        xr = np.linspace(0.0, 1.0, 50)[None, :]
+        all_times = self.ordered_times()
+        for nki in range(len(all_times) - 1):
+            p0, p1 = self._bezier_triplets[nki].vec[1], self._bezier_triplets[nki].vec[2]
+            p2, p3 = self._bezier_triplets[nki + 1].vec[0], self._bezier_triplets[nki + 1].vec[1]
+            p = ((1 - xr) ** 3) * p0[:, None] + (3 * (1 - xr) ** 2 * xr) * p1[:, None] + \
+                (3 * (1 - xr) * xr ** 2) * p2[:, None] + (xr ** 3) * p3[:, None]
+            plt.plot(p[0], p[1])
+        plt.show()
+
     def get_value(self, t):
         if not self._precomputed:
             self.precompute()
@@ -248,18 +266,22 @@ class BezierInterpolator(BaseInterpolator):
 
         from scipy.optimize import fsolve
         f = lambda x: o3t[0] * x ** 3 + o2t[0] * x ** 2 + o1t[0] * x + o0t[0]
-        fy = lambda x: o3t[1] * x ** 3 + o2t[1] * x ** 2 + o1t[1] * x + o0t[1]
+        fy = lambda x: o3t[1] * x ** 3 + o2t[1] * x ** 2 + o1t[1] * x + o0t[1] + t
         fprime = lambda x: 3 * o3t[0] * x ** 2 + 2 * o2t[0] * x + o1t[0]
         t_target = fsolve(f, [0.5], fprime=fprime)[0]
 
         return fy(t_target)
 
-    def send_blender(self, uuidx: str, data_path: str, index: int):
+    def send_blender(self, uuidx: str, data_path: str, index: int, negate: bool = False):
         if not self._precomputed:
             self.precompute()
 
-        blender.send_add_animation_fcurve(uuidx, data_path, index, 'bezier',
-                                          [t.vec for t in self._bezier_triplets])
+        values = [t.vec.copy() for t in self._bezier_triplets]
+        if negate:
+            for v in values:
+                v[:, 1] = -v[:, 1]
+
+        blender.send_add_animation_fcurve(uuidx, data_path, index, 'bezier', values)
 
 
 class SquadQuaternionInterpolator(BaseInterpolator):
@@ -432,10 +454,16 @@ class FreePoseAnimator(AnimatorBase):
         self.interp_y.send_blender(uuidx, 'location', 1)
         self.interp_z.send_blender(uuidx, 'location', 2)
         if self.rotation_type == FreePoseAnimator.RotationType.BLENDER:
-            self.interp_qw.send_blender(uuidx, 'rotation_quaternion', 0)
-            self.interp_qx.send_blender(uuidx, 'rotation_quaternion', 1)
-            self.interp_qy.send_blender(uuidx, 'rotation_quaternion', 2)
-            self.interp_qz.send_blender(uuidx, 'rotation_quaternion', 3)
+            if uuidx == "relative_camera":
+                self.interp_qx.send_blender(uuidx, 'rotation_quaternion', 0, negate=True)
+                self.interp_qw.send_blender(uuidx, 'rotation_quaternion', 1)
+                self.interp_qz.send_blender(uuidx, 'rotation_quaternion', 2)
+                self.interp_qy.send_blender(uuidx, 'rotation_quaternion', 3, negate=True)
+            else:
+                self.interp_qw.send_blender(uuidx, 'rotation_quaternion', 0)
+                self.interp_qx.send_blender(uuidx, 'rotation_quaternion', 1)
+                self.interp_qy.send_blender(uuidx, 'rotation_quaternion', 2)
+                self.interp_qz.send_blender(uuidx, 'rotation_quaternion', 3)
         else:
             self.interp_q.send_blender(uuidx, 'rotation_quaternion', None)
 

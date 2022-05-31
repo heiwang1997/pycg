@@ -100,7 +100,7 @@ def handle_cmds(msg):
         if msg['uuid'].lower() == 'relative_camera':
             target_object = bpy.context.scene.camera
         else:
-            target_object = bpy.data.objects[msg['uuid']]
+            target_object = AssetManager.data[msg['uuid']].object
 
         if target_object.animation_data is None:
             target_object.animation_data_create()
@@ -128,6 +128,8 @@ def handle_cmds(msg):
                 kf.handle_left_type = 'ALIGNED'     # Should be ok if we use AUTO_CLAMPED
                 kf.handle_right = v[2]
                 kf.handle_right_type = 'ALIGNED'
+
+        return {'result': 'added'}
 
     elif msg['cmd'] == 'render':
         bpy.context.scene.cycles.samples = msg['quality']

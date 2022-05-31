@@ -905,11 +905,23 @@ class Scene:
             rgb_img[:, :, :3] = rgb_img[:, :, :3][:, :, ::-1]
         return rgb_img
 
-    def render_blender_animation(self, do_render: bool = True):
+    def render_blender_animation(self, do_render: bool = True, quality: int = 128):
         self._setup_blender_static()
         self.animator.send_blender()
         if not do_render:
             blender.poll_notified()
+
+        t_start, t_end = self.animator.get_range()
+        for t_cur in range(t_start, t_end + 1):
+            blender.send_eval(f"bpy.context.scene.frame_set({t_cur})")
+            with tempfile.TemporaryDirectory() as render_tmp_dir_p:
+                # By default, blender will add '.png' to the input path if the suffix didn't exist.
+                render_tmp_file = Path(render_tmp_dir_p) / "rgb.png"
+                blender.send_render(quality=quality, save_path=str(render_tmp_file))
+                rgb_img = cv2.imread(str(render_tmp_file), cv2.IMREAD_UNCHANGED)
+                if rgb_img.shape[2] == 3 or rgb_img.shape[2] == 4:
+                    rgb_img[:, :, :3] = rgb_img[:, :, :3][:, :, ::-1]
+            yield t_cur, rgb_img
 
     def render_opengl(self, multisample: int = 1, need_alpha=False, save_path: str = None):
         saved_intrinsic = copy.copy(self.camera_intrinsic)
