@@ -129,6 +129,19 @@ def send_entity(geom, uuidx: str = None, pose: Isometry = None, attributes=None)
     return res_dict['uuid']
 
 
+def send_entity_pose(uuidx: str, rotation_mode: str = None, rotation_value=None, location_value=None):
+    assert rotation_mode in ['QUATERNION', 'XYZ', 'XZY', 'YZX', 'YXZ', 'ZXY', 'ZYX', 'AXIS_ANGLE']
+    _blender_connection.send({
+        'cmd': 'entity_pose',
+        'uuid': uuidx,
+        'rotation_mode': rotation_mode,
+        'rotation_value': rotation_value,
+        'location_value': location_value
+    })
+    res_dict = _blender_connection.receive(nowait=False)
+    assert res_dict['result'] == 'success'
+
+
 def send_add_keyframe(uuidx: str, frame: int, attribute: str, value):
     if isinstance(value, Isometry):
         cam_q = value.q * Quaternion(axis=[1.0, 0.0, 0.0], degrees=180.0)

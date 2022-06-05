@@ -18,6 +18,7 @@ import pickle
 import functools
 from collections import defaultdict
 import matplotlib.cm
+from open3d.visualization import gui
 
 
 class GLEngineWrapper:
@@ -26,8 +27,202 @@ class GLEngineWrapper:
         self.displayed_geometries = {}
 
 
+class VisualizerNewAPIClosures:
+    """
+    We create a separate scope here to store the data needed by the closure (i.e. <locals>)
+    So we do not need strange partials any more.
+    Note that changing arguments outside (such as all_windows) ...
+        still have impact on closure behaviours because args are anyway references.
+    https://stackoverflow.com/questions/14413946/what-exactly-is-contained-within-a-obj-closure
+    """
+    @staticmethod
+    def keyboard_closures(cur_window, cur_scene, cur_pose_change_callback, cur_hists, all_windows):
+
+        def on_key(e):
+            if e.type == gui.KeyEvent.DOWN:
+                if e.key == gui.KeyName.X:
+                    raise KeyboardInterrupt
+                elif e.key == gui.KeyName.Q:
+                    for w_cur in all_windows:
+                        w_cur.close()
+                elif e.key == gui.KeyName.S:
+                    cur_window.show_settings = not cur_window.show_settings
+                elif e.key == gui.KeyName.A:
+                    cur_window.show_axes = not cur_window.show_axes
+                elif e.key == gui.KeyName.H:
+                    for hst in cur_hists:
+                        hst.visible = not hst.visible
+                elif e.key == gui.KeyName.R:
+                    if cur_pose_change_callback is not None:
+                        # When output current pose, need to change back this.
+                        # if scale != 1.0:
+                        #     cur_scene.camera_intrinsic = cur_scene.camera_intrinsic.scale(1.0 / scale)
+                        if cur_scene.animator.is_enabled():
+                            cam_animator = cur_scene.animator.get_relative_camera()
+                            if cam_animator is not None and cam_animator.get_last_t() is not None:
+                                # cur_scene.animator.set_current_frame()
+                                # cur_window.scene_widget.force_redraw()
+                                # cur_window.post_redraw()
+                                cur_window.show_message_box(
+                                    "Reminder",
+                                    "Animation is saved. But the current camera can be only added via keyframes.")
+                        cur_pose_change_callback(cur_window)
+                        # if scale != 1.0:
+                        #     cur_scene.camera_intrinsic = cur_scene.camera_intrinsic.scale(scale)
+                elif e.key == gui.KeyName.L:
+                    if "sun" in cur_scene.lights.keys():
+                        if cur_scene.animator.is_enabled():
+                            sun_animator = cur_scene.animator.get_sun_pose()
+                            if sun_animator is not None and sun_animator.get_last_t() is not None:
+                                cur_window.show_message_box(
+                                    "Reminder",
+                                    "Sun can be saved. But it seems that it is actually controlled by an animator."
+                                )
+                        print("Light information written to scene.")
+                        sun_dir = cur_window.scene.scene.get_sun_light_direction()
+                        cur_scene.lights["sun"].pose = Isometry.look_at(source=np.zeros((3,)),
+                                                                        target=-sun_dir)
+                elif e.key == gui.KeyName.B:
+                    print("Culling settings saved.")
+                    cur_scene.backface_culling = not cur_scene.backface_culling
+                    for mesh_name, mesh_obj in cur_scene.objects.items():
+                        cur_window.scene.set_geometry_double_sided(mesh_name, not cur_scene.backface_culling)
+                    cur_window.scene_widget.force_redraw()
+                    cur_window.post_redraw()
+                elif e.key == gui.KeyName.EQUALS:  # + point size
+                    target_size = cur_window.point_size + 1
+                    for w_cur in all_windows:
+                        w_cur.point_size = target_size
+                        w_cur.scene_widget.force_redraw()
+                        w_cur.post_redraw()
+                elif e.key == gui.KeyName.MINUS:  # - point size
+                    target_size = cur_window.point_size - 1
+                    for w_cur in all_windows:
+                        w_cur.point_size = target_size
+                        w_cur.scene_widget.force_redraw()
+                        w_cur.post_redraw()
+                elif e.key == gui.KeyName.LEFT_BRACKET:
+                    pose, intr = VisualizerManager.get_window_camera_info(cur_window)
+                    intr.fov_x += np.deg2rad(5.0)
+                    cur_window.setup_camera(intr.to_open3d_intrinsic(), pose.inv().matrix)
+                elif e.key == gui.KeyName.RIGHT_BRACKET:
+                    pose, intr = VisualizerManager.get_window_camera_info(cur_window)
+                    intr.fov_x -= np.deg2rad(5.0)
+                    cur_window.setup_camera(intr.to_open3d_intrinsic(), pose.inv().matrix)
+            return 0
+
+        return on_key
+
+    @staticmethod
+    def mouse_closures(cur_window, all_windows):
+        def on_mouse(e):
+            if e.type == gui.MouseEvent.DRAG or e.type == gui.MouseEvent.WHEEL:
+                cam_pose, cam_intrinsic = VisualizerManager.get_window_camera_info(cur_window)
+                for w_others in all_windows:
+                    if id(w_others) != id(cur_window):
+                        w_others.setup_camera(cam_intrinsic.to_open3d_intrinsic(), cam_pose.inv().matrix)
+                        w_others.scene_widget.force_redraw()
+                        w_others.post_redraw()
+            return 0
+        return on_mouse
+
+    @staticmethod
+    def set_keyframer_closures(keyframer, cur_scene, cur_window):
+
+        all_targets = []
+        current_target = 0
+        CAM_NAME, CAM_ATTR = "relative_camera", "pose"
+        SUN_NAME, SUN_ATTR = "sun", "pose"
+
+        from .animation import FreePoseAnimator
+
+        for obj_uuid, obj_attribs in cur_scene.animator.events.items():
+            for attrib_name, attrib_interp in obj_attribs.items():
+                if obj_uuid == CAM_NAME and attrib_name == CAM_ATTR:
+                    current_target = len(all_targets)
+                all_targets.append([obj_uuid, attrib_name])
+
+        # Update all target attributes.
+        # Although we could only control relative_camera.pose, we could at least see the keyframes of other attributes...
+        def update_all_targets():
+            current_name, current_attr = all_targets[current_target]
+            keyframer.set_available_targets([f"{o}.{a}" for (o, a) in all_targets], current_target)
+            frame_start, frame_end = cur_scene.animator.get_range()
+            keyframer.set_keyframes(frame_start, frame_end, o3d.utility.IntVector(
+                cur_scene.animator.events[current_name][current_attr].ordered_times()
+            ))
+            keyframer.set_current_frame(cur_scene.animator.current_frame)
+
+        update_all_targets()
+
+        def on_frame_changed(new_t):
+            cur_scene.animator.set_frame(new_t)
+            cur_scene._update_filament_engine(cur_window)
+            cur_window.scene_widget.force_redraw()
+            cur_window.post_redraw()
+
+        def on_keyframe_added(new_t):
+            current_name, current_attr, = all_targets[current_target]
+            animator = cur_scene.animator.events[current_name][current_attr]
+
+            if current_name == CAM_NAME and current_attr == CAM_ATTR and isinstance(animator, FreePoseAnimator):
+                camera_pose, _ = VisualizerManager.get_window_camera_info(cur_window)
+                base_pose = cur_scene.camera_base
+                new_value = base_pose.inv() @ camera_pose
+            elif current_name == SUN_NAME and current_attr == SUN_ATTR and isinstance(animator, FreePoseAnimator):
+                sun_dir = cur_window.scene.scene.get_sun_light_direction()
+                new_value = Isometry.look_at(source=np.zeros((3,)), target=-sun_dir)
+            else:
+                new_value = animator.get_value(new_t, raw=True)
+
+            animator.set_keyframe(new_t, new_value)
+            update_all_targets()
+
+        def on_keyframe_removed(new_t):
+            current_name, current_attr, = all_targets[current_target]
+            animator = cur_scene.animator.events[current_name][current_attr]
+            animator.remove_keyframe(new_t)
+            update_all_targets()
+
+        def on_keyframe_moved(old_t, new_t):
+            current_name, current_attr, = all_targets[current_target]
+            animator = cur_scene.animator.events[current_name][current_attr]
+            kf_value = animator.get_value(old_t, raw=True)
+            animator.remove_keyframe(old_t)
+            animator.set_keyframe(new_t, kf_value)
+            cur_scene.animator.set_frame(new_t)
+            cur_scene._update_filament_engine(cur_window)
+            update_all_targets()
+
+        def on_play_status_changed(is_play):
+            cur_window.is_animating = is_play
+
+        def on_animation(e, t):
+            cur_scene.animator.set_frame(cur_scene.animator.current_frame + 1)
+            cur_scene._update_filament_engine(e)
+            keyframer.set_current_frame(cur_scene.animator.current_frame)
+
+        def on_target_changed(new_target):
+            nonlocal current_target
+            current_target = new_target
+            update_all_targets()
+
+        keyframer.set_on_frame_changed(on_frame_changed)
+        keyframer.set_on_keyframe_added(on_keyframe_added)
+        keyframer.set_on_keyframe_removed(on_keyframe_removed)
+        keyframer.set_on_keyframe_moved(on_keyframe_moved)
+        keyframer.set_on_play_status_changed(on_play_status_changed)
+        keyframer.set_on_target_changed(on_target_changed)
+        cur_window.animation_frame_delay = 0.05     # seconds
+        cur_window.set_on_animation_frame(on_animation)
+
+
 class VisualizerManager:
     TITLE_HEIGHT_FIX = 24
+    HISTOGRAM_COLORMAP = {
+        'viridis': gui.Color.Colormap.VIRIDIS, 'plasma': gui.Color.Colormap.PLASMA,
+        'jet': gui.Color.Colormap.JET, 'spectral': gui.Color.Colormap.SPECTRAL
+    }
 
     def __init__(self):
         self.scenes = []
@@ -84,8 +279,6 @@ class VisualizerManager:
 
         if use_new_api:
             # Please refer to Open3D/python/open3d/visualization/draw.py
-            from open3d.visualization import gui
-
             gui.Application.instance.initialize()
 
             all_windows = []
@@ -94,99 +287,50 @@ class VisualizerManager:
                     cur_title = f"Scene-{scene_idx:03d}"
 
                 c_param = o3d.visualization.O3DVisualizer.ConstructParams()
-                c_param.set_scene_widget(gui.SceneWidget() if len(self.scenes) > 1 else None)
+                c_param.set_scene_widget(gui.SceneWidget())
+                other_widgets = []
 
-                # Analyse and add histogram window if necessary...
-                all_hists = []
+                # Analyse and add histogram window if necessary.
+                histogram_widgets = []
                 for mesh_name, mesh_obj in cur_scene.objects.items():
                     if mesh_obj.annotations is None:
                         continue
                     if isinstance(mesh_obj.geom, o3d.geometry.PointCloud):
-                        hist_data = np.asarray(mesh_obj.geom.points)
                         h_min, h_max, h_values = self.convert_histogram(mesh_obj.annotations[0])
-                        hist_widget = gui.Histogram(20, 50 + len(all_hists) * 100, 400, 100, f"PC-{mesh_name[:6]}")
-                        hist_widget.set_value(h_min, h_max, h_values, {
-                            'viridis': gui.Color.Colormap.VIRIDIS, 'plasma': gui.Color.Colormap.PLASMA,
-                            'jet': gui.Color.Colormap.JET, 'spectral': gui.Color.Colormap.SPECTRAL
-                        }[mesh_obj.annotations[1]])
-                        all_hists.append(hist_widget)
-                c_param.other_widgets = all_hists
+                        hist_widget = gui.Histogram(20, 50 + len(histogram_widgets) * 100, 400, 100, f"PC-{mesh_name[:6]}")
+                        hist_widget.set_value(h_min, h_max, h_values, self.HISTOGRAM_COLORMAP[mesh_obj.annotations[1]])
+                        histogram_widgets.append(hist_widget)
+                other_widgets += histogram_widgets
 
+                # Add keyframer if necessary.
+                if cur_scene.animator.is_enabled():
+                    keyframer = gui.Keyframer(
+                        (cur_scene.camera_intrinsic.w - 600) // 2, int(cur_scene.camera_intrinsic.h * 0.8),
+                        600, 100, "Keyframer (Top row: time, Bottom row: keyframe mover, Press Tab to enter number)")
+                    other_widgets.append(keyframer)
+                else:
+                    keyframer = None
+
+                c_param.other_widgets = other_widgets
                 w = o3d.visualization.O3DVisualizer(title=cur_title, width=cur_scene.camera_intrinsic.w,
                                                     height=cur_scene.camera_intrinsic.h + self.TITLE_HEIGHT_FIX,
                                                     param=c_param)
                 all_windows.append(w)
                 cur_scene._build_filament_engine(w)
-                w.show_settings = False
-                w.reset_camera_to_default()     # important, because it correctly set up scene bounds
-                w.setup_camera(cur_scene.camera_intrinsic.to_open3d_intrinsic(), cur_scene.camera_pose.inv().matrix)
 
-                def on_key(e, idx):
-                    if e.type == gui.KeyEvent.DOWN:
-                        if e.key == gui.KeyName.X:
-                            raise KeyboardInterrupt
-                        elif e.key == gui.KeyName.Q:
-                            for w_cur in all_windows:
-                                w_cur.close()
-                        elif e.key == gui.KeyName.S:
-                            all_windows[idx].show_settings = not all_windows[idx].show_settings
-                        elif e.key == gui.KeyName.A:
-                            all_windows[idx].show_axes = not all_windows[idx].show_axes
-                        elif e.key == gui.KeyName.H:
-                            for hst in all_hists:
-                                hst.visible = not hst.visible
-                        elif e.key == gui.KeyName.R:
-                            if self.pose_change_callbacks[idx] is not None:
-                                # When output current pose, need to change back this.
-                                if scale != 1.0:
-                                    self.scenes[idx].camera_intrinsic = self.scenes[idx].camera_intrinsic.scale(1.0 / scale)
-                                self.pose_change_callbacks[idx](all_windows[idx])
-                                if scale != 1.0:
-                                    self.scenes[idx].camera_intrinsic = self.scenes[idx].camera_intrinsic.scale(scale)
-                        elif e.key == gui.KeyName.L:
-                            print("Light information written to scene.")
-                            sun_dir = w.scene.scene.get_sun_light_direction()
-                            cur_scene.lights["default"].pose = Isometry.look_at(source=np.zeros((3, )),
-                                                                                target=-sun_dir)
-                        elif e.key == gui.KeyName.EQUALS:       # + point size
-                            target_size = all_windows[idx].point_size + 1
-                            for w_cur in all_windows:
-                                w_cur.point_size = target_size
-                                w_cur.scene_widget.force_redraw()
-                                w_cur.post_redraw()
-                        elif e.key == gui.KeyName.MINUS:       # - point size
-                            target_size = all_windows[idx].point_size - 1
-                            for w_cur in all_windows:
-                                w_cur.point_size = target_size
-                                w_cur.scene_widget.force_redraw()
-                                w_cur.post_redraw()
-                        elif e.key == gui.KeyName.LEFT_BRACKET:
-                            pose, intr = self.get_window_camera_info(all_windows[idx])
-                            intr.fov_x += np.deg2rad(5.0)
-                            all_windows[idx].setup_camera(intr.to_open3d_intrinsic(), pose.inv().matrix)
-                        elif e.key == gui.KeyName.RIGHT_BRACKET:
-                            pose, intr = self.get_window_camera_info(all_windows[idx])
-                            intr.fov_x -= np.deg2rad(5.0)
-                            all_windows[idx].setup_camera(intr.to_open3d_intrinsic(), pose.inv().matrix)
-                    return 0
+                # -- Define and set callbacks --
+
+                # Set animation and edits callback
+                if keyframer is not None:
+                    VisualizerNewAPIClosures.set_keyframer_closures(keyframer, cur_scene, w)
 
                 # You can also do w.scene_widget.set_on_key, but on panels it won't respond.
-                w.set_on_key(functools.partial(on_key, idx=scene_idx))
+                w.set_on_key(VisualizerNewAPIClosures.keyboard_closures(
+                    w, cur_scene, self.pose_change_callbacks[scene_idx], histogram_widgets, all_windows))
 
                 if len(self.scenes) > 1:
                     # Sync camera.
-                    def on_mouse(e, idx):
-                        if e.type == gui.MouseEvent.DRAG or e.type == gui.MouseEvent.WHEEL:
-                            cur_w = all_windows[idx]
-                            cam_pose, cam_intrinsic = self.get_window_camera_info(cur_w)
-
-                            for w_others in all_windows:
-                                if id(w_others) != id(cur_w):
-                                    w_others.setup_camera(cam_intrinsic.to_open3d_intrinsic(), cam_pose.inv().matrix)
-                                    w_others.scene_widget.force_redraw()
-                                    w_others.post_redraw()
-                        return 0
-                    w.scene_widget.set_on_mouse(functools.partial(on_mouse, idx=scene_idx))
+                    w.scene_widget.set_on_mouse(VisualizerNewAPIClosures.mouse_closures(w, all_windows))
 
                 gui.Application.instance.add_window(w)
 
@@ -456,6 +600,58 @@ class SceneObject:
         transformed_geom.transform(self.pose.matrix)
         return transformed_geom
 
+    def get_filament_material(self, scene_shader, scene_point_size):
+        mat = o3d.visualization.rendering.MaterialRecord()
+        mat.shader = {
+            'LIT': "defaultLit", 'UNLIT': "defaultUnlit", 'NORMAL': 'normals'
+        }[scene_shader]
+        mat.point_size = scene_point_size
+        mat.line_width = 1
+
+        if isinstance(self.geom, o3d.geometry.LineSet):
+            mat.shader = 'unlitLine'
+
+        if "alpha" in self.attributes:
+            mat.base_color = (1.0, 1.0, 1.0, self.attributes["alpha"])
+            if mat.shader == 'defaultLit':
+                mat.shader = "defaultLitTransparency"
+            elif mat.shader == 'defaultUnlit':
+                mat.shader = "defaultUnlitTransparency"
+
+        if "material.specular" in self.attributes:
+            mat.base_reflectance = self.attributes["material.specular"]
+        else:
+            mat.base_reflectance = 0.0
+
+        if "material.metallic" in self.attributes:
+            mat.base_metallic = self.attributes["material.metallic"]
+        else:
+            mat.base_metallic = 0.0
+
+        if "material.roughness" in self.attributes:
+            mat.base_roughness = self.attributes["material.roughness"]
+        else:
+            mat.base_roughness = 1.0
+
+        if "material.normal" in self.attributes:
+            if self.attributes["material.normal"]["on"]:
+                mat.shader = 'normals'
+
+        if "smooth_shading" in self.attributes:
+            if self.attributes["smooth_shading"]:
+                if not self.geom.has_vertex_normals():
+                    self.geom.compute_vertex_normals()
+            else:
+                if self.geom.has_vertex_normals():
+                    self.geom.vertex_normals.clear()
+                if not self.geom.has_triangle_normals():
+                    self.geom.compute_triangle_normals()
+
+        if "uniform_color" in self.attributes:
+            mat.base_color = self.attributes["uniform_color"]
+
+        return mat
+
     def add_usd_prim(self, stage, prim_path):
         # https://raw.githubusercontent.com/NVIDIAGameWorks/kaolin/master/kaolin/io/usd.py
         from pxr import UsdGeom, Vt, Gf
@@ -502,6 +698,9 @@ class SceneLight:
 
 
 class Scene:
+    # We just use this sun to view shape for now (x100).
+    PREVIEW_SUN_INTENSITY = 400.0
+
     def __init__(self, cam_path: str = None):
         self.objects = {}
         self.lights = {}
@@ -515,24 +714,29 @@ class Scene:
         self.cam_path = Path(cam_path) if cam_path else cam_path
         # These are old-api specific settings
         self.gl_render_options = o3d.visualization.RenderOption()
-        self.gl_render_options.mesh_show_back_face = True
         self.gl_render_options.point_show_normal = False
+
+        # These are old/new shared settings
+        self.ambient_color = (1.0, 1.0, 1.0, 1.0)
+        self.film_transparent = False
+        self.background_image = None
+        self.point_size = 5.0
+        self.viewport_shading = 'LIT'       # Supported: LIT, UNLIT, NORMAL
+        self.up_axis = '+Y'
+        self.backface_culling = False
+
+        # We no longer add default light: this is now controlled by themes.
+        self.additional_blender_commands = ""
+
+        # Animation controls.
+        self.animator = SceneAnimator(self)
+
         try:
             self.load_camera()
         except FileNotFoundError:
             pass
         except AttributeError:
             pass
-        # These are old/new shared settings
-        self.ambient_color = (1.0, 1.0, 1.0, 1.0)
-        self.film_transparent = False
-        self.point_size = 5.0
-        self.viewport_shading = 'LIT'       # Supported: LIT, UNLIT, NORMAL
-        self.up_axis = '+Y'
-
-        # Add a default light.
-        self.add_light_sun(name="default")
-        self.animator = SceneAnimator(self)
 
     @property
     def camera_pose(self):
@@ -595,20 +799,33 @@ class Scene:
     def load_camera(self):
         with self.cam_path.open('rb') as cam_f:
             camera_data = pickle.load(cam_f)
-        self.camera_pose = camera_data['extrinsic']
+        self.relative_camera_pose = camera_data['extrinsic']
         self.camera_intrinsic = camera_data['intrinsic']
+        relative_animator = camera_data.get('relative_animator', None)
+        base_animator = camera_data.get('base_animator', None)
+        camera_base = camera_data.get('base', None)
+
+        if camera_base is not None:
+            self.camera_base = camera_base
+        if relative_animator is not None:
+            self.animator.set_relative_camera(relative_animator)
+        if base_animator is not None:
+            self.animator.set_camera_base(base_animator)
 
     def save_camera(self):
         self.cam_path.parent.mkdir(parents=True, exist_ok=True)
         with self.cam_path.open('wb') as scene_f:
             pickle.dump({
-                'extrinsic': self.camera_pose,
-                'intrinsic': self.camera_intrinsic
+                'extrinsic': self.relative_camera_pose,
+                'intrinsic': self.camera_intrinsic,
+                'base': self.camera_base,
+                'relative_animator': self.animator.get_relative_camera(),
+                'base_animator': self.animator.get_camera_base()
             }, scene_f)
 
     def quick_camera(self, pos=None, look_at=None, w=1024, h=768, fov=60.0, up_axis=None,
-                     fill_percent=0.5, plane_angle=0.0, force_override=False):
-        if self.cam_path is not None and self.cam_path.exists() and not force_override:
+                     fill_percent=0.5, plane_angle=0.0, no_override=False):
+        if self.cam_path is not None and self.cam_path.exists() and no_override:
             return self
 
         if up_axis is not None:
@@ -640,6 +857,7 @@ class Scene:
                 pos = look_at + distance * (np.cos(plane_angle / 180.0 * np.pi) * cplane_x +
                                             np.sin(plane_angle / 180.0 * np.pi) * cplane_y)
 
+        self.camera_base = Isometry(t=look_at)
         self.camera_pose = Isometry.look_at(np.asarray(pos), np.asarray(look_at), up_axis)
         self.camera_intrinsic = CameraIntrinsic.from_fov(w, h, np.deg2rad(fov))
         return self
@@ -779,6 +997,7 @@ class Scene:
             engine.get_render_option().point_color_option = o3d.visualization.PointColorOption.Normal
         elif self.viewport_shading == 'UNLIT':
             engine.get_render_option().light_on = False
+        engine.get_render_option().mesh_show_back_face = not self.backface_culling
         return warpped_engine
 
     def _update_gl_engine(self, gl_engine: GLEngineWrapper):
@@ -795,33 +1014,30 @@ class Scene:
                 engine.add_geometry(geom, reset_bounding_box=False)
                 gl_engine.displayed_geometries[obj_uuid] = geom
 
-    def _build_filament_engine(self, scene):
-        # Note: sv is the object with shared API.
-        if isinstance(scene, o3d.visualization.rendering.Open3DScene):
-            visualizer = None
-            sv = scene
-        elif isinstance(scene, o3d.visualization.O3DVisualizer):
-            visualizer = scene
-            scene = visualizer.scene
-            sv = visualizer
+    def _build_filament_engine(self, engine):
+        if isinstance(engine, o3d.visualization.rendering.OffscreenRenderer):
+            # -- Used for offline render
+            visualizer = None               # (no gui)
+            scene = engine.scene            # o3d.visualization.rendering.Open3DScene
+            sv = scene                      # o3d.visualization.rendering.Open3DScene
+        elif isinstance(engine, o3d.visualization.O3DVisualizer):
+            # -- Used for GUI.
+            visualizer = engine             # o3d.visualization.O3DVisualizer
+            scene = visualizer.scene        # o3d.visualization.rendering.Open3DScene
+            sv = visualizer                 # o3d.visualization.O3DVisualizer
         else:
             raise NotImplementedError
 
-        sv.set_background((1.0, 1.0, 1.0, 1.0), None)
+        # Using the shared API enables update of GUI.
+        if self.background_image is not None:
+            background_data = o3d.geometry.Image(self.background_image)
+            sv.set_background((1.0, 1.0, 1.0, 1.0), background_data)
+        elif self.film_transparent:
+            sv.set_background((1.0, 1.0, 1.0, 1.0), None)
+        else:
+            sv.set_background(list(self.ambient_color[:3]) + [1.0], None)
+
         sv.show_skybox(False)
-        for mesh_name, mesh_obj in self.objects.items():
-            # TODO: Adapt to other types of geometries!
-            #   cpp/open3d/visualization/visualizer/O3DVisualizer.cpp:883
-            mat = o3d.visualization.rendering.MaterialRecord()
-            mat.shader = {
-                'LIT': "defaultLit", 'UNLIT': "defaultUnlit", 'NORMAL': 'normals'
-            }[self.viewport_shading]
-            mat.point_size = int(self.point_size)
-            mat.line_width = 1
-            if "alpha" in mesh_obj.attributes:
-                mat.base_color = (1.0, 1.0, 1.0, mesh_obj.attributes["alpha"])
-                mat.shader = "defaultLitTransparency"
-            sv.add_geometry(mesh_name, mesh_obj.get_transformed(), mat)
 
         if visualizer is not None:
             # Although we already set material above, the following will make the UI correct.
@@ -830,24 +1046,60 @@ class Scene:
             visualizer.scene_shader = {
                 'LIT': visualizer.STANDARD, 'UNLIT': visualizer.UNLIT, 'NORMAL': visualizer.NORMALS
             }[self.viewport_shading]
+            visualizer.enable_sun_follows_camera(False)
+
+        for mesh_name, mesh_obj in self.objects.items():
+            mat = mesh_obj.get_filament_material(self.viewport_shading, int(self.point_size))
+            # Origin is mesh_obj.get_transformed()
+            sv.add_geometry(mesh_name, mesh_obj.geom, mat)
+            scene.set_geometry_transform(mesh_name, mesh_obj.pose.matrix)
+            scene.set_geometry_double_sided(mesh_name, not self.backface_culling)
 
         import open3d.visualization.rendering as o3dr
         scene.view.set_color_grading(o3dr.ColorGrading(o3dr.ColorGrading.Quality.ULTRA,
                                                        o3dr.ColorGrading.ToneMapping.LINEAR))
-        # w.scene.scene.add_directional_light('light', [1, 1, 1], np.array([0,-1,-1]), 1e5, True)
-        # w.scene.scene.add_directional_light('light2', [1, 1, 1], np.array([0,1,1]), 1e5, True)
-        # w.scene.scene.add_point_light('plight', [1, 1, 1], [0, 1, 1], 1e6, 1000, True)
-        # w.scene.view.set_shadowing(True, o3dr.ShadowType.PCF)
 
-        cur_scene_light = self.lights.get("default", SceneLight('NONE'))
-        if cur_scene_light.type == 'SUN':
+        scene.scene.set_indirect_light_intensity(self.ambient_color[-1] * 37500)
+        sun_light = self.lights.get("sun", None)    # <-- we only allow this sun name.
+        if sun_light is None:
+            scene.scene.enable_sun_light(False)
+        elif sun_light.type == 'SUN':
             scene.scene.set_sun_light(
-                -cur_scene_light.pose.q.rotation_matrix[:, 2],
-                [255, 255, 255],
-                400.0
-            )
-        elif cur_scene_light.type == 'NONE':
-            scene.scene.set_sun_light([0., 1., 0.], [0, 0, 0], 0.0)
+                -sun_light.pose.q.rotation_matrix[:, 2], [255, 255, 255], self.PREVIEW_SUN_INTENSITY)
+        for light_name, light_obj in self.lights.items():
+            if light_obj.type == 'DIRECTIONAL':
+                scene.scene.add_directional_light('light', [1, 1, 1], np.array([0, -1, -1]), 1e5, True)
+            elif light_obj.type == 'POINT':
+                scene.scene.add_point_light('plight', [1, 1, 1], [0, 1, 1], 1e6, 1000, True)
+
+        if visualizer is not None:
+            engine.show_settings = False
+            engine.reset_camera_to_default()  # important, because it correctly set up scene bounds
+
+        engine.setup_camera(self.camera_intrinsic.to_open3d_intrinsic(), self.camera_pose.inv().matrix)
+
+    def _update_filament_engine(self, engine):
+        if isinstance(engine, o3d.visualization.rendering.OffscreenRenderer):
+            # -- Used for offline render
+            visualizer = None               # (no gui)
+            scene = engine.scene            # o3d.visualization.rendering.Open3DScene
+            sv = scene                      # o3d.visualization.rendering.Open3DScene
+        elif isinstance(engine, o3d.visualization.O3DVisualizer):
+            # -- Used for GUI.
+            visualizer = engine             # o3d.visualization.O3DVisualizer
+            scene = visualizer.scene        # o3d.visualization.rendering.Open3DScene
+            sv = visualizer                 # o3d.visualization.O3DVisualizer
+        else:
+            raise NotImplementedError
+
+        if "relative_camera" in self.animator.events.keys() or "camera_base" in self.animator.events.keys():
+            engine.setup_camera(self.camera_intrinsic.to_open3d_intrinsic(), self.camera_pose.inv().matrix)
+        for obj_uuid in self.animator.events.keys():
+            if scene.has_geometry(obj_uuid):
+                scene.set_geometry_transform(obj_uuid, self.objects[obj_uuid].pose.matrix)
+            if obj_uuid == 'sun':
+                scene.scene.set_sun_light(
+                    -self.lights['sun'].pose.q.rotation_matrix[:, 2], [255, 255, 255], self.PREVIEW_SUN_INTENSITY)
 
     def record_camera_pose(self, vis):
         if not hasattr(vis, "get_view_control"):
@@ -863,11 +1115,15 @@ class Scene:
         return False
 
     def preview(self, allow_change_pose=True, add_ruler=True, title="Render Preview", use_new_api=False,
-                key_bindings=None, with_animation=False):
+                key_bindings=None):
 
         if len(vis_manager.scenes) != 0:
             print("Warning: there are still buffered scenes in the manager which are not fully shown.")
             vis_manager.reset()
+
+        if self.animator.is_enabled():
+            self.animator.set_current_frame()
+
         vis_manager.add_scene(self, title, self.record_camera_pose if allow_change_pose else None)
         vis_manager.run(use_new_api=use_new_api, key_bindings=key_bindings)
         return self
@@ -879,7 +1135,9 @@ class Scene:
             blender.send_entity(obj_data.geom, obj_uuid, obj_data.pose, obj_data.attributes)
         for light_uuid, light_data in self.lights.items():
             blender.send_light(light_data, light_uuid)
-        blender.send_camera(self.camera_pose, self.camera_intrinsic)
+        blender.send_entity_pose("camera_base", rotation_mode='QUATERNION', rotation_value=self.camera_base.q.q.tolist(),
+                                 location_value=self.camera_base.t.tolist())
+        blender.send_camera(self.relative_camera_pose, self.camera_intrinsic)
         blender.send_eval(f"bg_node=bpy.data.worlds['World'].node_tree.nodes['Background'];"
                           f"bg_node.inputs[0].default_value=({self.ambient_color[0]},{self.ambient_color[1]},{self.ambient_color[2]},1);"
                           f"bg_node.inputs[1].default_value={self.ambient_color[3]}")
@@ -976,169 +1234,52 @@ class Scene:
         self.camera_intrinsic = saved_intrinsic
 
     def render_filament(self, headless: bool = True):
-        # Cache DISPLAY environment
-        x11_environ = None
-        if 'DISPLAY' in os.environ:
-            x11_environ = os.environ['DISPLAY']
-            del os.environ['DISPLAY']
+        # Cache DISPLAY environment (don't use)
+        #   My guess: whenever you create filament (off-screen or on-screen), EGL's context will be cached using
+        # the current DISPLAY variable. Hence if you first do off-screen, then do on-screen, error will happen.
+        #   Solution: Just don't use this...
+        # x11_environ = None
+        # if 'DISPLAY' in os.environ:
+        #     x11_environ = os.environ['DISPLAY']
+        #     del os.environ['DISPLAY']
         renderer = o3d.visualization.rendering.OffscreenRenderer(
             self.camera_intrinsic.w, self.camera_intrinsic.h, "", headless)
-        self._build_filament_engine(renderer.scene)
-        renderer.setup_camera(self.camera_intrinsic.to_open3d_intrinsic(), self.camera_pose.inv().matrix)
+        self._build_filament_engine(renderer)
         img = renderer.render_to_image()
-        if x11_environ is not None:
-            os.environ['DISPLAY'] = x11_environ
+        # if x11_environ is not None:
+        #     os.environ['DISPLAY'] = x11_environ
         return np.array(img)
 
 
-class AnimatedVisualizer:
-    def __init__(self, scene):      # scene is an Animator.
-        self.scene = scene
-        self.engine = o3d.visualization.VisualizerWithKeyCallback()
-        self.engine.create_window(window_name="Animated Visualizer",
-                                  width=scene.scene.camera_intrinsic.w,
-                                  height=scene.scene.camera_intrinsic.h,
-                                  visible=True)
-        self.engine.get_render_option().mesh_show_back_face = True
-        self.current_displaying = {}
-        if True:    # Open3D cannot correctly initialize from given camera pose without this mesh due to bad znear and zfar
-            probe_mesh = o3d.geometry.TriangleMesh.create_box(width=5.0, height=5.0, depth=5.0)
-            self.engine.add_geometry(probe_mesh)
-            self.engine.remove_geometry(probe_mesh, reset_bounding_box=False)
+class BaseTheme:
+    def __init__(self):
+        pass
 
-    def _update_geometry(self, name, transformed_geom, geom_pose):
-        print("Updated", name, transformed_geom, geom_pose)
-        if name in self.current_displaying.keys():
-            self.engine.remove_geometry(self.current_displaying[name].geom, reset_bounding_box=False)
-            del self.current_displaying[name]
-        if transformed_geom is not None:
-            self.engine.add_geometry(transformed_geom, reset_bounding_box=False)
-            self.current_displaying[name] = SceneObject(transformed_geom, geom_pose)
+    def clear(self, scene: Scene):
+        pass
 
-    def run(self):
-        self.engine.run()
-
-    def refresh(self):
-        # Camera pose will always be updated.
-        self.engine.get_view_control().convert_from_pinhole_camera_parameters(
-            self.scene.scene.camera_intrinsic.get_pinhole_camera_param(
-                self.scene.scene.camera_pose, fix_bug=True)
-        )
-        # Checkout object updates.
-        for mesh_name, mesh_obj in self.scene.scene.objects.items():
-            # Object visibility.
-            if mesh_name not in self.current_displaying.keys() and mesh_obj.visible:
-                self._update_geometry(mesh_name, mesh_obj.get_transformed(), mesh_obj.pose)
-            elif mesh_name in self.current_displaying.keys() and not mesh_obj.visible:
-                self._update_geometry(mesh_name, None, None)
-            # Object pose. (do not worry the object being added twice because we only capture difference)
-            # TODO: Finalize the debug this...
-            # if mesh_name in self.current_displaying.keys() and mesh_obj.pose != self.current_displaying[mesh_obj].pose:
-            #     self._update_geometry(mesh_name, mesh_obj.get_transformed(), mesh_obj.pose)
+    def apply_to(self, scene: Scene):
+        raise NotImplementedError
 
 
-# class Animator:
-#     def __init__(self, scene):
-#         self.scene = scene
-#         # uuid -> attributes -> interpolator
-#         self.events = defaultdict(lambda: defaultdict(BaseValueInterpolator))
-#
-#     def get_range(self):
-#         frame_max = -1e10
-#         frame_min = 1e10
-#         for obj_attrib in self.events.values():
-#             for obj_interp in obj_attrib.values():
-#                 frame_max = max(frame_max, obj_interp.get_last_t())
-#                 frame_min = min(frame_min, obj_interp.get_first_t())
-#         return frame_min, frame_max
-#
-#     def set_frame(self, t):
-#         for obj_uuid, obj_attribs in self.events.items():
-#             for attrib_name, attrib_interp in obj_attribs.items():
-#                 attrib_val = attrib_interp.get_value(t)
-#                 if obj_uuid == "camera" and attrib_name == "pose":
-#                     self.scene.camera_pose = attrib_val
-#                 elif attrib_name == "pose":
-#                     self.scene.objects[obj_uuid].pose = attrib_val
-#                 elif attrib_name == "visible":
-#                     self.scene.objects[obj_uuid].visible = attrib_val
-#
-#     def move_camera_event(self, frame_id: int, new_pose: Isometry):
-#         self.events["camera"]["pose"].set_keyframe(frame_id, new_pose)
-#
-#     def add_object_event(self, frame_id: int, obj_uuid: str = None, obj_geom=None):
-#         """
-#         Add an object at @frame_id. If @obj_uuid is not None, will re-use previously-added object,
-#         otherwise will add new object as @obj_geom
-#         """
-#         if obj_geom is not None:
-#             obj_uuid = self.scene.add_object(obj_geom, return_name=True)
-#
-#         assert obj_uuid in self.scene.objects.keys()
-#         self.events[obj_uuid]["visible"].set_keyframe(frame_id, True)
-#
-#
-#     def remove_object_event(self, frame_id: int, obj_uuid: str):
-#         assert obj_uuid in self.scene.objects.keys()
-#         self.events[obj_uuid]["visible"].set_keyframe(frame_id, False)
-#
-#     def move_object_event(self, frame_id: int, obj_uuid: str, new_pose: Isometry):
-#         assert obj_uuid in self.scene.objects.keys()
-#         self.events["camera"]["pose"].set_keyframe(frame_id, new_pose)
-#
-#     def render_blender(self, increment=1):
-#         self.scene._setup_blender_static()
-#
-#         for obj_uuid, obj_attribs in self.events.items():
-#             for attrib_name, attrib_interp in obj_attribs.items():
-#                 attrib_keyframes = attrib_interp.get_keyframes()
-#                 for kt, kval in attrib_keyframes:
-#                     blender.send_add_keyframe(obj_uuid, int(kt // increment), attrib_name, kval)
-#
-#         blender.poll_notified()
-#         # if not do_render:
-#         #     # Wait for user to respond
-#         #     blender.poll_notified()
-#         #
-#         # if save_path is not None:
-#         #     blender.send_render(quality=quality, save_path=save_path)
-#         #     return None
-#         # else:
-#         #     with tempfile.TemporaryDirectory() as render_tmp_dir_p:
-#         #         # By default, blender will add '.png' to the input path if the suffix didn't exist.
-#         #         render_tmp_file = Path(render_tmp_dir_p) / "rgb.png"
-#         #         blender.send_render(quality=quality, save_path=str(render_tmp_file))
-#         #         rgb_img = cv2.imread(str(render_tmp_file), cv2.IMREAD_UNCHANGED)
-#         #
-#         # if rgb_img.shape[2] == 3 or rgb_img.shape[2] == 4:
-#         #     rgb_img[:, :, :3] = rgb_img[:, :, :3][:, :, ::-1]
-#         # return rgb_img
-#
-#     def preview(self, start_frame=0, increment=1, autoplay=False):
-#         visualizer = AnimatedVisualizer(self)
-#
-#         cur_frame = start_frame
-#         self.set_frame(cur_frame)
-#         visualizer.refresh()
-#
-#         def next_frame(vis):
-#             nonlocal cur_frame
-#             self.set_frame(cur_frame + increment)
-#             cur_frame += increment
-#             visualizer.refresh()
-#
-#         def prev_frame(vis):
-#             nonlocal cur_frame
-#             self.set_frame(cur_frame - increment)
-#             cur_frame -= increment
-#             visualizer.refresh()
-#
-#         visualizer.engine.register_key_callback(key=ord("A"), callback_func=next_frame)
-#         visualizer.engine.register_key_callback(key=ord("B"), callback_func=prev_frame)
-#         if autoplay:
-#             visualizer.engine.register_animation_callback(callback_func=next_frame)
-#
-#         visualizer.engine.run()
+class IndoorRoomTheme(BaseTheme):
+    def __init__(self):
+        super().__init__()
+
+    def apply_to(self, scene):
+        scene.add_light_sun('indoor-sun')
+        scene.additional_blender_commands = """
+            for i in D.objects:
+                i.mat.default = 1.0
+        """
+
+
+class BleedShadow(BaseTheme):
+    pass
+
+
+class TransparentShadow(BaseTheme):
+    pass
 
 
 def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=None, viewport_shading='NORMAL'):
@@ -1164,17 +1305,6 @@ def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=No
     return image.hlayout_images(multiview_pics)
 
 
-def preset_shadowed_render(geom: o3d.geometry.TriangleMesh, set_camera: bool = False):
-    """
-    A preset that quickly convert 3D into a picture.
-        This preset features in a white background and a nice color-bleed shadow. Perfect for a paper.
-    :param geom:
-    :param set_camera:
-    :return:
-    """
-    pass
-
-
 def render_depth(render_group_lists: list, camera_list: list, camera_intrinsic: CameraIntrinsic,
                  backend='blender', exec_id: int = 0):
     """
@@ -1192,39 +1322,6 @@ def render_depth(render_group_lists: list, camera_list: list, camera_intrinsic: 
         return render_depth_open3d(render_group_lists, camera_list, camera_intrinsic)
     else:
         raise NotImplementedError
-
-
-def render_full_model(render_group_lists: list, camera_list: list, n_points: int, poisson_disk_sampling=True):
-    """
-    Render with an X-ray camera. This is equivalent to simply sample on a mesh.
-    We render this to test the importance of missing areas.
-    :return: list of point clouds.
-    """
-    from utils.point_util import furthest_sampling_cloud
-    n_group = len(render_group_lists)
-
-    pc_points = []
-    pc_segms = []
-    for group_id in range(n_group):
-        parts_point = []
-        parts_segm = []
-        for part_id, part_mesh in enumerate(render_group_lists[group_id]):
-            if len(part_mesh.triangles) == 0:
-                continue
-            if poisson_disk_sampling:
-                part_pc = part_mesh.sample_points_poisson_disk(n_points)
-            else:
-                part_pc = part_mesh.sample_points_uniformly(n_points)
-            # print(np.asarray(part_pc.points))
-            parts_point.append(np.asarray(part_pc.points))
-            parts_segm.append(np.ones((n_points,), dtype=int) * (part_id + 1))
-        group_points = np.vstack(parts_point)
-        group_segm = np.concatenate(parts_segm)
-        # o3d.visualization.draw_geometries([vis_util.pointcloud(group_points, group_segm)])
-        sampled_indices = furthest_sampling_cloud(group_points, n_points, output_indices=True)
-        pc_points.append((camera_list[group_id].inv() @ group_points[sampled_indices, :]))
-        pc_segms.append(group_segm[sampled_indices])
-    return pc_points, pc_segms
 
 
 def render_depth_open3d(render_group_lists: list, camera_list: list, camera_intrinsic: CameraIntrinsic):
@@ -1304,29 +1401,3 @@ def render_depth_blender(render_group_lists: list, camera_list: list, camera_int
             obid_maps.append(exr_obid)
 
     return depth_maps, obid_maps
-
-
-def depth_to_point_cloud(depth_mat: np.ndarray, camera_intrinsic: CameraIntrinsic, norm_ray=False):
-    """
-    Convert depth map to point cloud, considering the depth map is a z buffer
-    :param depth_mat: W x H np.ndarray
-    :param camera_intrinsic: Camera Intrinsic
-    :param norm_ray: Whether the depth map is generated by normalizing rays.
-    :return: (point cloud, W x H binary mask)
-    """
-    # Build mesh grid
-    xx, yy = np.meshgrid(np.arange(0, camera_intrinsic.w), np.arange(0, camera_intrinsic.h))
-    mg = np.concatenate((xx.reshape(1, -1), yy.reshape(1, -1)), axis=0)
-    mg_homo = np.vstack((mg, np.ones((1, mg.shape[1]))))
-    pc = np.matmul(camera_intrinsic.inv_K, mg_homo)
-    if norm_ray:
-        pc /= np.linalg.norm(pc, axis=0)
-    pc = depth_mat.ravel()[np.newaxis, :] * pc
-    # Crop invalid observations.
-    # print(pc)
-    if norm_ray:
-        pc_mask = pc[2] < 1e2
-    else:
-        pc_mask = pc[2] > 0.0
-    pc = pc[:, pc_mask].T
-    return pc, pc_mask

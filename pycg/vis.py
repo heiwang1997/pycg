@@ -810,6 +810,7 @@ def transformed_oobb(oobb: o3d.geometry.OrientedBoundingBox, iso: Isometry):
     oobb.translate(iso.t)
     return oobb
 
+
 def lineset(linset_or_points: Union[np.ndarray, torch.Tensor, o3d.geometry.LineSet],
             lines: Union[np.ndarray, torch.Tensor] = None,
             cid: Union[np.ndarray, torch.Tensor] = None,
@@ -837,6 +838,7 @@ def lineset(linset_or_points: Union[np.ndarray, torch.Tensor, o3d.geometry.LineS
 
     geom.colors = o3d.utility.Vector3dVector(color)
     return geom
+
 
 def lineset_mesh(lst: o3d.geometry.LineSet, radius: float, resolution: int = 10):
     end_points = np.asarray(lst.points)
@@ -881,6 +883,23 @@ def lineset_mesh(lst: o3d.geometry.LineSet, radius: float, resolution: int = 10)
         line_colors = None
 
     return mesh(all_verts.reshape(-1, 3), face_ids.reshape(-1, 3), color=line_colors)
+
+
+def wireframe(mesh: o3d.geometry.TriangleMesh):
+    points = np.asarray(mesh.vertices)
+    triangles = np.asarray(mesh.triangles)
+
+    wireframe_ids = np.vstack([
+        triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [0, 2]]
+    ])
+    wireframe_ids = np.sort(wireframe_ids, axis=1)
+    wireframe_ids = np.unique(wireframe_ids, axis=0)
+
+    geom = o3d.geometry.LineSet(
+        points=o3d.utility.Vector3dVector(points),
+        lines=o3d.utility.Vector2iVector(wireframe_ids))
+
+    return geom
 
 
 def wireframe_bbox(extent_min=None, extent_max=None, solid=False, tube=False, tube_radius=0.001,

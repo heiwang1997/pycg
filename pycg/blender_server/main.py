@@ -25,6 +25,16 @@ class BlenderTextHandler(StreamHandler):
         self.text.write(msg + '\n')
 
 
+def get_object(name):
+    if name.lower() == 'relative_camera':
+        target_object = bpy.context.scene.camera
+    elif name.lower() == "camera_base":
+        target_object = bpy.data.objects["camera_base"]
+    else:
+        target_object = AssetManager.data[name].object
+    return target_object
+
+
 def handle_cmds(msg):
     if msg['cmd'] == 'entity':
         logging.info(f"Command entity: draw {msg['geometry_type']}.")
@@ -42,6 +52,9 @@ def handle_cmds(msg):
         # Clear lights
         for light_data in bpy.data.lights:
             bpy.data.lights.remove(light_data, do_unlink=True)
+        # Clear camera and base animations
+        get_object('relative_camera').animation_data_clear()
+        get_object('camera_base').animation_data_clear()
         return {'result': 'success'}
     elif msg['cmd'] == 'camera':
         cur_scene = bpy.context.scene
@@ -85,6 +98,24 @@ def handle_cmds(msg):
             'result': 'created',
             'uuid': light_id
         }
+    elif msg['cmd'] == 'entity_pose':
+        target_object = get_object(msg['uuid'])
+        if msg['rotation_mode'] is not None:
+            target_object.rotation_mode = msg['rotation_mode']
+            if msg['rotation_mode'] == 'QUATERNION':
+                for q in range(4):
+                    target_object.rotation_quaternion[q] = msg['rotation_value'][q]
+            elif msg['rotation_mode'] == 'AXIS_ANGLE':
+                for q in range(4):
+                    target_object.rotation_axis_angle[q] = msg['rotation_value'][q]
+            else:
+                for q in range(3):
+                    target_object.rotation[q].rotation_euler[q] = msg['rotation_value'][q]
+        if msg['location_value'] is not None:
+            loc = msg['location_value']
+            target_object.location = (loc[0], loc[1], loc[2])
+        return {'result': 'success'}
+
     elif msg['cmd'] == 'add_keyframe':
         if msg['uuid'].lower() == 'camera':
             cur_scene = bpy.context.scene
@@ -97,11 +128,7 @@ def handle_cmds(msg):
                 cur_scene.camera.keyframe_insert(data_path="rotation_quaternion", frame=msg['frame'])
         return {'result': 'added'}
     elif msg['cmd'] == 'add_animation_fcurve':
-        if msg['uuid'].lower() == 'relative_camera':
-            target_object = bpy.context.scene.camera
-        else:
-            target_object = AssetManager.data[msg['uuid']].object
-
+        target_object = get_object(msg['uuid'])
         if target_object.animation_data is None:
             target_object.animation_data_create()
 
@@ -179,6 +206,7 @@ class ClientOperator(bpy.types.Operator):
             try:
                 res = handle_cmds(new_command)
             except KeyError as e:
+                logging.error(e)
                 res = {'result': 'failed'}
             if res is not None:
                 self.res_queue.put(res)
@@ -228,6 +256,13 @@ def init_env():
     # Empty scene
     D.meshes.remove(D.meshes["Cube"], do_unlink=True)
     D.lights.remove(D.lights["Light"], do_unlink=True)
+
+    # Link the camera to an empty object
+    camera_base = bpy.data.objects.new(name='camera_base', object_data=None)
+    camera_base.empty_display_size = 1.0
+    camera_base.empty_display_type = 'PLAIN_AXES'
+    bpy.context.collection.objects.link(camera_base)
+    bpy.context.scene.camera.parent = camera_base
 
     # Renderer and Color specs
     D.scenes[0].render.engine = 'CYCLES'

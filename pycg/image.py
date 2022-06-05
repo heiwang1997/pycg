@@ -236,7 +236,7 @@ def show(*imgs, reverse_rgb: bool = False, n_rows: int = 1, subfig_size: int = 3
         if img.ndim > 2 and img.shape[2] == 4:
             img_back = chessboard(img.shape[1], img.shape[0])
             img = alpha_compositing(img, img_back)
-        if img.ndim > 2 and img.shape[2] >= 3:
+        if img.ndim > 2 and img.shape[2] >= 3 and reverse_rgb:
             img = np.copy(img)
             img[:, :, :3] = img[:, :, [2, 1, 0]]
         show_imgs.append(img)

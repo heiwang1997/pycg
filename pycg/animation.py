@@ -8,6 +8,14 @@ from pycg import blender_client as blender
 from collections import defaultdict
 
 
+"""
+Guidance to add a new animated attribute:
+    - In SceneAnimator: add setter/getter of animators. add how the attributes should be applied in set_frame.
+    - In render._update_XXX_engine: add how the viewer should re-load the new attributes.
+    - In render.keyframer.callbacks: add how information from the scene should be loaded.
+"""
+
+
 def quaternion_uniform_flip(q_list):
     """
     Flip the directions of quaternions to prevent from not taking the nearest path.
@@ -105,6 +113,12 @@ class LinearInterpolator(BaseInterpolator):
         next_value = self._keyframes[all_times[nki]]
         return (1 - alpha) * prev_value + alpha * next_value
 
+    def send_blender(self, uuidx: str, data_path: str, index: int, negate: bool = False):
+        kf = self.ordered_keyframes()
+        if negate:
+            kf = [(t, -v) for (t, v) in kf]
+        blender.send_add_animation_fcurve(uuidx, data_path, index, 'linear', kf)
+
 
 class LinearQuaternionInterpolator(BaseInterpolator):
     """
@@ -189,7 +203,7 @@ class BezierInterpolator(BaseInterpolator):
                 len_a = min(len_a, 5.0 * len_b)
                 len_b = min(len_b, 5.0 * len_a)
                 cur_triplet.vec[0] = p2 - (tvec / (2 * 2.5614)) * len_a
-                cur_triplet.vec[2] = p2 - (tvec / (2 * 2.5614)) * len_b
+                cur_triplet.vec[2] = p2 + (tvec / (2 * 2.5614)) * len_b
             else:
                 if prev_t is None and next_t is None:
                     delta_t = 1.0
@@ -358,6 +372,7 @@ class AnimatorBase:
         self.interpolators = {}
         # For better export-ability
         self.keyframes = {}
+        self._precomputed = False
 
     def add_interpolator(self, name, inst):
         assert name not in self.interpolators.keys()
@@ -368,8 +383,13 @@ class AnimatorBase:
         raise NotImplementedError
 
     def remove_keyframe(self, t):
+        self._precomputed = False
         for itp in self.interpolators.values():
             itp.remove_keyframe(t)
+
+    def ordered_times(self):
+        all_times = sum([itp.ordered_times() for itp in self.interpolators.values()], [])
+        return sorted(set(all_times))
 
     def get_first_t(self):
         first_t_list = [itp.get_first_t() for itp in self.interpolators.values()]
@@ -381,7 +401,7 @@ class AnimatorBase:
         last_t_list = [t for t in last_t_list if t is not None]
         return max(last_t_list) if len(last_t_list) > 0 else None
 
-    def get_value(self, t):
+    def get_value(self, t, raw: bool = False):
         raise NotImplementedError
 
 
@@ -420,6 +440,7 @@ class FreePoseAnimator(AnimatorBase):
 
     def set_keyframe(self, t, value: Isometry):
         assert isinstance(value, Isometry)
+        self._precomputed = False
 
         self.interp_x.set_keyframe(t, value.t[0])
         self.interp_y.set_keyframe(t, value.t[1])
@@ -433,7 +454,26 @@ class FreePoseAnimator(AnimatorBase):
         else:
             self.interp_q.set_keyframe(t, value.q)
 
-    def get_value(self, t):
+    def precompute(self):
+        self._precomputed = True
+        if self.rotation_type == FreePoseAnimator.RotationType.BLENDER:
+            # Flip quaternions to avoid non-closest rotation.
+            kf_qw, kf_qx = self.interp_qw.ordered_keyframes(), self.interp_qx.ordered_keyframes(),
+            kf_qy, kf_qz = self.interp_qy.ordered_keyframes(), self.interp_qz.ordered_keyframes()
+            q_list = [Quaternion([
+                kf_qw[t][1], kf_qx[t][1], kf_qy[t][1], kf_qz[t][1]
+            ]) for t in range(len(kf_qw))]
+            new_qs = quaternion_uniform_flip(q_list)
+            for time, new_q in zip(self.interp_qw.ordered_times(), new_qs):
+                self.interp_qw.set_keyframe(time, new_q.q[0])
+                self.interp_qx.set_keyframe(time, new_q.q[1])
+                self.interp_qy.set_keyframe(time, new_q.q[2])
+                self.interp_qz.set_keyframe(time, new_q.q[3])
+
+    def get_value(self, t, raw: bool = False):
+        if not self._precomputed:
+            self.precompute()
+
         new_x = self.interp_x.get_value(t)
         new_y = self.interp_y.get_value(t)
         new_z = self.interp_z.get_value(t)
@@ -450,6 +490,9 @@ class FreePoseAnimator(AnimatorBase):
         return new_iso
 
     def send_blender(self, uuidx: str):
+        if not self._precomputed:
+            self.precompute()
+
         self.interp_x.send_blender(uuidx, 'location', 0)
         self.interp_y.send_blender(uuidx, 'location', 1)
         self.interp_z.send_blender(uuidx, 'location', 2)
@@ -468,9 +511,35 @@ class FreePoseAnimator(AnimatorBase):
             self.interp_q.send_blender(uuidx, 'rotation_quaternion', None)
 
 
-class SpinPoseAnimator:
-    def __init__(self, interp_type: InterpType, spin_axis: str = '+X'):
-        pass
+class SpinPoseAnimator(AnimatorBase):
+    def __init__(self, interp_type: InterpType, center, spin_axis: str = '+Y'):
+        super().__init__()
+        self.interp_type = interp_type
+        self.center = center
+        self.spin_axis = Isometry._str_to_axis(spin_axis)
+        if self.interp_type == InterpType.LINEAR:
+            self.interp = self.add_interpolator('angle', LinearInterpolator())
+        elif self.interp_type == InterpType.BEZIER:
+            self.interp = self.add_interpolator('angle', BezierInterpolator())
+
+    def set_keyframe(self, t, value):
+        assert isinstance(value, float)
+        self.interp.set_keyframe(t, value)
+
+    def get_value(self, t, raw: bool = False):
+        new_angle = self.interp.get_value(t)
+        if raw:
+            return new_angle
+        return Isometry.from_axis_angle(self.spin_axis, radians=new_angle, t=self.center)
+
+    def send_blender(self, uuidx: str):
+        if uuidx == "relative_camera":
+            raise NotImplementedError
+
+        blender.send_entity_pose(uuidx, rotation_mode='AXIS_ANGLE',
+                                 rotation_value=[0.0, self.spin_axis[0], self.spin_axis[1], self.spin_axis[2]],
+                                 location_value=[self.center[0], self.center[1], self.center[2]])
+        self.interp.send_blender(uuidx, 'rotation_axis_angle', 0)
 
 
 class SceneAnimator:
@@ -479,17 +548,41 @@ class SceneAnimator:
         # uuid -> attributes -> animator
         #   or 'free' -> 'command' -> animator
         self.events = defaultdict(dict)
+        self.current_frame = 0
+
+        self._start_frame = 0
+        self._end_frame = 0
+
+    def is_enabled(self):
+        s, e = self.get_range()
+        return s < e
 
     def get_range(self):
-        frame_max = -1e10
-        frame_min = 1e10
+        frame_max = self._end_frame
+        frame_min = self._start_frame
         for obj_attrib in self.events.values():
             for obj_interp in obj_attrib.values():
-                frame_max = max(frame_max, obj_interp.get_last_t())
-                frame_min = min(frame_min, obj_interp.get_first_t())
+                cur_first, cur_last = obj_interp.get_first_t(), obj_interp.get_last_t()
+                if cur_last is not None:
+                    frame_max = max(frame_max, cur_last)
+                if cur_first is not None:
+                    frame_min = min(frame_min, cur_first)
+        self._start_frame = frame_min
+        self._end_frame = frame_max
         return frame_min, frame_max
 
+    def set_range(self, start_frame, end_frame):
+        self._start_frame, self._end_frame = start_frame, end_frame
+        self.get_range()
+        if self._start_frame != start_frame:
+            print(f"Warning (set_range): {self._start_frame} vs. {start_frame}!")
+        if self._end_frame != end_frame:
+            print(f"Warning (set_range): {self._end_frame} vs. {end_frame}!")
+
     def send_blender(self):
+        s, e = self.get_range()
+        blender.send_eval(f"bpy.context.scene.frame_start={s}")
+        blender.send_eval(f"bpy.context.scene.frame_end={e}")
         for obj_uuid, obj_attribs in self.events.items():
             for attrib_name, attrib_interp in obj_attribs.items():
                 attrib_interp.send_blender(obj_uuid)
@@ -497,24 +590,51 @@ class SceneAnimator:
     def set_frame(self, t):
         for obj_uuid, obj_attribs in self.events.items():
             for attrib_name, attrib_interp in obj_attribs.items():
+                if attrib_interp.get_first_t() is None:
+                    continue
                 attrib_val = attrib_interp.get_value(t)
                 if obj_uuid == "relative_camera":
                     if attrib_name == "pose":
                         self.scene.relative_camera_pose = attrib_val
                     else:
                         raise NotImplementedError
+                elif obj_uuid == "camera_base":
+                    self.scene.camera_base = attrib_val
                 elif obj_uuid == "free":
                     eval(f"self.scene.{attrib_name} = attrib_val")
                 elif attrib_name == "pose":
-                    self.scene.objects[obj_uuid].pose = attrib_val
+                    if obj_uuid in self.scene.objects.keys():
+                        self.scene.objects[obj_uuid].pose = attrib_val
+                    if obj_uuid in self.scene.lights.keys():
+                        self.scene.lights[obj_uuid].pose = attrib_val
                 elif attrib_name == "visible":
                     self.scene.objects[obj_uuid].visible = attrib_val
+        self.current_frame = t
 
-    def set_relative_camera(self, animator):
+    def set_current_frame(self):
+        self.set_frame(self.current_frame)
+
+    def get_animator(self, obj_idx, attr_idx):
+        try:
+            return self.events[obj_idx][attr_idx]
+        except KeyError:
+            return None
+
+    def set_relative_camera(self, animator, no_override: bool = False):
+        if self.get_relative_camera() is not None and no_override:
+            return
         self.events["relative_camera"]["pose"] = animator
 
     def get_relative_camera(self):
-        return self.events["relative_camera"]["pose"]
+        return self.get_animator("relative_camera", "pose")
+
+    def set_camera_base(self, animator, no_override: bool = False):
+        if self.get_camera_base() is not None and no_override:
+            return
+        self.events["camera_base"]["pose"] = animator
+
+    def get_camera_base(self):
+        return self.get_animator("camera_base", "pose")
 
     def set_object_pose(self, obj_uuid: str, animator):
         assert obj_uuid in self.scene.objects.keys()
@@ -524,35 +644,18 @@ class SceneAnimator:
         assert obj_uuid in self.scene.objects.keys()
         self.events[obj_uuid]["visible"] = animator
 
+    def set_light_pose(self, light_name: str, animator):
+        assert light_name in self.scene.lights.keys()
+        self.events[light_name]["pose"] = animator
+
+    def set_sun_pose(self, animator):
+        self.set_light_pose('sun', animator)
+
+    def get_light_pose(self, light_name):
+        return self.get_animator(light_name, "pose")
+
+    def get_sun_pose(self):
+        return self.get_light_pose('sun')
+
     def set_free_command(self, command: str, animator):
         self.events['free'][command] = animator
-
-    # def add_object_event(self, frame_id: int, obj_uuid: str = None, obj_geom=None):
-    #     """
-    #     Add an object at @frame_id. If @obj_uuid is not None, will re-use previously-added object,
-    #     otherwise will add new object as @obj_geom
-    #     """
-    #     if obj_geom is not None:
-    #         obj_uuid = self.scene.add_object(obj_geom, return_name=True)
-    #
-    #     assert obj_uuid in self.scene.objects.keys()
-    #     self.events[obj_uuid]["visible"].set_keyframe(frame_id, True)
-    #
-    # def remove_object_event(self, frame_id: int, obj_uuid: str):
-    #     assert obj_uuid in self.scene.objects.keys()
-    #     self.events[obj_uuid]["visible"].set_keyframe(frame_id, False)
-    #
-    # def move_object_event(self, frame_id: int, obj_uuid: str, new_pose: Isometry):
-    #     assert obj_uuid in self.scene.objects.keys()
-    #     self.events["camera"]["pose"].set_keyframe(frame_id, new_pose)
-
-    # def render_blender(self, increment=1):
-    #     self.scene._setup_blender()
-    #
-    #     for obj_uuid, obj_attribs in self.events.items():
-    #         for attrib_name, attrib_interp in obj_attribs.items():
-    #             attrib_keyframes = attrib_interp.get_keyframes()
-    #             for kt, kval in attrib_keyframes:
-    #                 blender.send_add_keyframe(obj_uuid, int(kt // increment), attrib_name, kval)
-    #
-    #     blender.poll_notified()
