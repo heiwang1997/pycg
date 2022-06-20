@@ -84,7 +84,7 @@ def handle_cmds(msg):
 
         if msg['type'] == 'SUN':
             light_data.angle = msg['angle']
-        elif msg['type'] == 'POINT':
+        elif msg['type'] == 'POINT' or msg['type'] == 'SPOT':
             light_data.shadow_soft_size = msg['radius']
         elif msg['type'] == 'AREA':
             light_data.size = msg['size']

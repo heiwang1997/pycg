@@ -15,9 +15,7 @@ from pyquaternion import Quaternion
 import uuid
 import copy
 import pickle
-import functools
-from collections import defaultdict
-import matplotlib.cm
+import textwrap
 from open3d.visualization import gui
 
 
@@ -40,7 +38,39 @@ class VisualizerNewAPIClosures:
 
         def on_key(e):
             if e.type == gui.KeyEvent.DOWN:
-                if e.key == gui.KeyName.X:
+                if e.key == gui.KeyName.COMMA:
+                    cur_window.show_message_box(
+                        "Help",
+                        "Mouse Control (Arcball Mode):\n"
+                        " + Left button: rotate\n"
+                        " + Double left click: set rotation center to pointed position\n"
+                        " + Shift + Left: high-precision dolly.\n"
+                        " + (Ctrl + Shift)/(Meta) + Left: in-screen-plane rotation (RotateZ).\n"
+                        " + Ctrl + Left: Pan\n"
+                        " + Right button: Pan\n"
+                        " + Wheel: low-precision dolly.\n"
+                        " + Shift + Wheel: high-precision fov.\n"
+                        "Keyboard Shortcuts:\n"
+                        " + e(X)it: raise a KeyboardInterrupt exception to end the program directly.\n"
+                        " + (S)etting: show settings side-bard.\n"
+                        " + (A)xes: show the axes.\n"
+                        " + (H)istogram: show histograms if available.\n"
+                        " + (R)ecord: record the current camera poses (and its animation if existing).\n"
+                        " + (L)ight: record the sun light direction (but not saved to file).\n"
+                        " + (O)bject: record the object pose (but not saved to file)."
+                        " + (B)ackface: control whether to cull backface\n"
+                        " + +/-: increase/decrease the size of point cloud.\n"
+                        " + [/]: increase/decrease the fov.")
+                elif e.key == gui.KeyName.ONE:
+                    print("View Control set to rotate camera")
+                    cur_window.mouse_mode = gui.SceneWidget.Controls.ROTATE_CAMERA
+                elif e.key == gui.KeyName.TWO:
+                    print("View Control set to pick geometry... Use control+click to pick.")
+                    cur_window.mouse_mode = gui.SceneWidget.Controls.PICK_GEOMETRY
+                elif e.key == gui.KeyName.THREE:
+                    print("View Control set to rotate model")
+                    cur_window.mouse_mode = gui.SceneWidget.Controls.ROTATE_MODEL
+                elif e.key == gui.KeyName.X:
                     raise KeyboardInterrupt
                 elif e.key == gui.KeyName.Q:
                     for w_cur in all_windows:
@@ -82,6 +112,12 @@ class VisualizerNewAPIClosures:
                         sun_dir = cur_window.scene.scene.get_sun_light_direction()
                         cur_scene.lights["sun"].pose = Isometry.look_at(source=np.zeros((3,)),
                                                                         target=-sun_dir)
+                elif e.key == gui.KeyName.O:
+                    for obj_name, obj in cur_scene.objects.items():
+                        if cur_window.scene.has_geometry(obj_name):
+                            new_transform = cur_window.scene.get_geometry_transform(obj_name)
+                            obj.pose = Isometry.from_matrix(new_transform)
+                            print(f"Object {obj_name}'s pose written to scene")
                 elif e.key == gui.KeyName.B:
                     print("Culling settings saved.")
                     cur_scene.backface_culling = not cur_scene.backface_culling
@@ -228,12 +264,16 @@ class VisualizerManager:
         self.scenes = []
         self.scene_titles = []
         self.pose_change_callbacks = []
+        self.all_engines = []
+        self.use_new_api = None
         self.reset()
 
     def reset(self):
         self.scenes = []
         self.scene_titles = []
         self.pose_change_callbacks = []
+        self.all_engines = []
+        self.use_new_api = None
 
     def add_scene(self, scene, title=None, pose_change_callback=None):
         self.scenes.append(scene)
@@ -267,15 +307,12 @@ class VisualizerManager:
         kernel = stats.gaussian_kde(data)
         return r_min, r_max, kernel(pos)
 
-    def run(self, use_new_api=False, key_bindings=None, max_cols=-1, scale=1.0):
+    def build_engines(self, use_new_api=False, key_bindings=None, max_cols=-1):
+        self.use_new_api = use_new_api
+
         assert len(self.scenes) > 0, "No scene to show."
         if max_cols == -1:
             max_cols = len(self.scenes)
-
-        if scale != 1.0:
-            # If scale is applied, modify the cameras of the scene to fit scale.
-            for scene in self.scenes:
-                scene.camera_intrinsic = scene.camera_intrinsic.scale(scale)
 
         if use_new_api:
             # Please refer to Open3D/python/open3d/visualization/draw.py
@@ -297,7 +334,8 @@ class VisualizerManager:
                         continue
                     if isinstance(mesh_obj.geom, o3d.geometry.PointCloud):
                         h_min, h_max, h_values = self.convert_histogram(mesh_obj.annotations[0])
-                        hist_widget = gui.Histogram(20, 50 + len(histogram_widgets) * 100, 400, 100, f"PC-{mesh_name[:6]}")
+                        hist_widget = gui.Histogram(20, 50 + len(histogram_widgets) * 100, 400, 100,
+                                                    f"PC-{mesh_name[:6]}")
                         hist_widget.set_value(h_min, h_max, h_values, self.HISTOGRAM_COLORMAP[mesh_obj.annotations[1]])
                         histogram_widgets.append(hist_widget)
                 other_widgets += histogram_widgets
@@ -336,8 +374,7 @@ class VisualizerManager:
 
                 if len(self.scenes) > 1:
                     w.os_frame = gui.Rect(w.os_frame.width * scene_idx, 0, w.os_frame.width, w.os_frame.height)
-
-            gui.Application.instance.run()
+            self.all_engines = all_windows
 
         else:
             all_engines = []
@@ -357,6 +394,7 @@ class VisualizerManager:
 
                 def interrupt(vis):
                     raise KeyboardInterrupt
+
                 engine.register_key_callback(key=ord("X"), callback_func=interrupt)
 
                 def toggle_axis(vis):
@@ -367,6 +405,7 @@ class VisualizerManager:
                         else:
                             eng.remove_geometry(axis_object, reset_bounding_box=False)
                     axis_shown = not axis_shown
+
                 engine.register_key_callback(key=ord("A"), callback_func=toggle_axis)
 
                 if key_bindings is not None:
@@ -374,17 +413,7 @@ class VisualizerManager:
                         engine.register_key_callback(key=ord(_key.upper()), callback_func=_func)
 
                 if self.pose_change_callbacks[scene_idx] is not None:
-                    if scale == 1.0:
-                        new_callback = self.pose_change_callbacks[scene_idx]
-                    else:
-                        def new_callback(vis):
-                            assert False, "Fuck this is buggy. Don't use."
-                            if scale != 1.0:
-                                cur_scene.camera_intrinsic = cur_scene.camera_intrinsic.scale(1.0 / scale)
-                            self.pose_change_callbacks[scene_idx](vis)
-                            if scale != 1.0:
-                                cur_scene.camera_intrinsic = cur_scene.camera_intrinsic.scale(scale)
-
+                    new_callback = self.pose_change_callbacks[scene_idx]
                     engine.register_key_callback(key=ord("R"), callback_func=new_callback)
 
                 # if add_ruler:
@@ -410,31 +439,62 @@ class VisualizerManager:
                             # engine.get_render_option().load_from_json("/tmp/ro.json")
 
                     engine.register_view_refresh_callback(on_view_refresh)
-
                 all_engines.append(engine)
+            self.all_engines = all_engines
 
-            if len(all_engines) < 2:
+    def run(self, use_new_api=False, key_bindings=None, max_cols=-1, scale=1.0):
+        self.build_engines(use_new_api, key_bindings=key_bindings, max_cols=max_cols)
+        if self.use_new_api:
+            gui.Application.instance.run()
+        else:
+            if len(self.all_engines) < 2:
                 # For one window, use the faster solution.
-                all_engines[0].run()
+                self.all_engines[0].run()
             else:
                 while True:
                     can_stop = False
-                    for eng in all_engines:
+                    for eng in self.all_engines:
                         if not eng.poll_events():
                             can_stop = True
                         eng.update_renderer()
                     if can_stop:
                         break
-
-            for eng in all_engines:
+            for eng in self.all_engines:
                 eng.destroy_window()
-
-        if scale != 1.0:
-            # If scale is applied, modify the cameras of the scene to fit scale.
-            for scene in self.scenes:
-                scene.camera_intrinsic = scene.camera_intrinsic.scale(1.0 / scale)
-
         self.reset()
+
+    def run_step(self, update_from_scene: bool = False):
+        if self.use_new_api is None or len(self.all_engines) == 0:
+            print("You have to call build_engines first in order to run step by step.")
+        elif self.use_new_api is True:
+            if update_from_scene:
+                for scene, w in zip(self.scenes, self.all_engines):
+                    scene._update_filament_engine(w)
+                    w.scene_widget.force_redraw()
+                    w.post_redraw()
+            can_stop = not gui.Application.instance.run_one_tick()
+            if can_stop:
+                self.reset()
+        else:
+            if update_from_scene:
+                for scene, w in zip(self.scenes, self.all_engines):
+                    scene._update_gl_engine(w)
+            can_stop = False
+            for eng in self.all_engines:
+                if not eng.poll_events():
+                    can_stop = True
+                    break
+                eng.update_renderer()
+            if can_stop:
+                for eng in self.all_engines:
+                    eng.destroy_window()
+                self.reset()
+
+    def get_scene_engine(self, scene):
+        for s, engine in zip(self.scenes, self.all_engines):
+            if id(s) == id(scene):
+                return engine
+        return None
 
 
 # Global manager.
@@ -561,6 +621,8 @@ class CameraIntrinsic:
 
 
 class SceneObject:
+    USD_RAW_ATTR_NAME = "pycg_raw_attributes"
+
     def __init__(self, geom, pose: Isometry = Isometry(), attributes: dict = None):
         if attributes is None:
             attributes = {}
@@ -654,10 +716,7 @@ class SceneObject:
 
     def add_usd_prim(self, stage, prim_path):
         # https://raw.githubusercontent.com/NVIDIAGameWorks/kaolin/master/kaolin/io/usd.py
-        from pxr import UsdGeom, Vt, Gf
-
-        # xform = UsdGeom.Xform.Define(stage, prim_path)
-        # xform.AddTransformOp().Set(Gf.Matrix4d(self.pose.matrix.T))
+        from pxr import UsdGeom, UsdShade, Vt, Gf, Sdf
 
         if isinstance(self.geom, o3d.geometry.TriangleMesh):
             usd_mesh = UsdGeom.Mesh.Define(stage, prim_path)
@@ -669,6 +728,37 @@ class SceneObject:
             if self.geom.has_vertices():
                 vert_data = np.asarray(self.geom.vertices)
                 usd_mesh.GetPointsAttr().Set(Vt.Vec3fArray.FromNumpy(vert_data))
+            if self.geom.has_vertex_colors():
+                # This will be suppressed by material. But this serves as a save slot.
+                vert_color_data = np.asarray(self.geom.vertex_colors)
+                usd_mesh.GetDisplayColorAttr().Set(Vt.Vec3fArray.FromNumpy(vert_color_data))
+                usd_mesh.GetPrimvar('displayColor').SetInterpolation('vertex')
+
+            mesh_material = UsdShade.Material.Define(stage, f"{prim_path}/material")
+            mesh_material.GetPrim().CreateAttribute(self.USD_RAW_ATTR_NAME, Sdf.ValueTypeNames.String).Set(
+                str(self.attributes))
+            mesh_shader = UsdShade.Shader.Define(stage, f"{prim_path}/material/shader")
+            mesh_shader.CreateIdAttr("UsdPreviewSurface")
+
+            # https://graphics.pixar.com/usd/release/spec_usdpreviewsurface.html
+            if "alpha" in self.attributes:
+                mesh_shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(self.attributes["alpha"])
+            if "material.metallic" in self.attributes:
+                mesh_shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(self.attributes["material.metallic"])
+            if "material.roughness" in self.attributes:
+                mesh_shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(self.attributes["material.roughness"])
+
+            u_color = None
+            if "uniform_color" in self.attributes:
+                u_color = self.attributes["uniform_color"]
+            elif self.geom.has_vertex_colors():
+                u_color = vert_color_data[0]
+            if u_color is not None:
+                mesh_shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Vector3f).Set(Gf.Vec3f(u_color.tolist()))
+
+            mesh_material.CreateSurfaceOutput().ConnectToSource(mesh_shader.ConnectableAPI(), "surface")
+            UsdShade.MaterialBindingAPI(usd_mesh).Bind(mesh_material)
+
         elif isinstance(self.geom, o3d.geometry.PointCloud):
             usd_pcd = UsdGeom.Points.Define(stage, prim_path)
             usd_pcd.AddTransformOp().Set(Gf.Matrix4d(self.pose.matrix.T))
@@ -686,20 +776,93 @@ class SceneObject:
 
 
 class SceneLight:
+    # We just use this sun to view shape for now (x100).
+    PREVIEW_LIGHT_COLOR = [1., 1., 1.]
+    FILAMENT_INTENSITY_MULT = 20000
+
     def __init__(self, mtype, pose: Isometry = Isometry(), attributes: dict = None):
         self.type = mtype
         self.pose = pose
         if attributes is None:
             attributes = {}
         self.attributes = attributes
+        """
+        Possible attributes (4 possible types):
+            - type=SUN: energy (unit: blender W), angle (unit: rad)
+            - type=POINT: energy (unit: blender W), radius
+            - type=SPOT: energy (unit: blender W), radius
+            - type=AREA: energy (unit: blender W), size
+        """
+
+    def setup_filament_scene(self, name, fengine: o3d.visualization.rendering.Scene, scene, update: bool = False):
+        if name == "sun":
+            fengine.set_sun_light(
+                -self.pose.q.rotation_matrix[:, 2], self.PREVIEW_LIGHT_COLOR,
+                self.attributes["energy"] * self.FILAMENT_INTENSITY_MULT)
+        elif self.type == 'SUN':
+            sun_light_direction = -self.pose.q.rotation_matrix[:, 2]
+            sun_light_intensity = self.attributes["energy"] * self.FILAMENT_INTENSITY_MULT
+            if not update:
+                # light_name, color, direction, intensity, cast_shadows
+                fengine.add_directional_light(name, self.PREVIEW_LIGHT_COLOR, sun_light_direction,
+                                              sun_light_intensity, True)
+            else:
+                fengine.update_light_direction(name, sun_light_direction)
+                fengine.update_light_intensity(name, sun_light_intensity)
+        elif self.type == 'POINT':
+            point_light_intensity = self.attributes["energy"] * self.FILAMENT_INTENSITY_MULT
+            if not update:
+                # name, color, position, intensity, falloff, cast_shadows
+                fengine.add_point_light(name, self.PREVIEW_LIGHT_COLOR, self.pose.t,
+                                        point_light_intensity, 1000, True)
+            else:
+                fengine.update_light_position(name, self.pose.t)
+                fengine.update_light_intensity(name, point_light_intensity)
+        elif self.type == 'SPOT':
+            spot_light_position = self.pose.t
+            spot_light_direction = -self.pose.q.rotation_matrix[:, 2]
+            spot_light_intensity = self.attributes["energy"] * self.FILAMENT_INTENSITY_MULT
+            if not update:
+                # name, color, position, direction, intensity, falloff, inner_cone_angle, outer_cone_angle, cast_shadows
+                fengine.add_spot_light(name, self.PREVIEW_LIGHT_COLOR, spot_light_position, spot_light_direction,
+                                       spot_light_intensity, 1000, 0.1, 0.2, True)
+            else:
+                fengine.update_light_position(name, spot_light_position)
+                fengine.update_light_direction(name, spot_light_direction)
+                fengine.update_light_intensity(name, spot_light_intensity)
+        else:
+            if not update:
+                print(f"Warning: light {name} of type {self.type} is not yet supported in filament!")
 
     def add_usd_prim(self, stage, prim_path):
-        pass
+        from pxr import UsdLux, UsdGeom, Vt, Gf
+
+        if self.type == 'POINT':
+            usd_light = UsdLux.SphereLight.Define(stage, prim_path)
+            usd_light.AddTransformOp().Set(Gf.Matrix4d(self.pose.matrix.T))
+            usd_light.GetRadiusAttr().Set(self.attributes["radius"])
+            usd_light.GetIntensityAttr().Set(self.attributes["energy"] * 0.01)
+            usd_light.GetColorAttr().Set(Gf.Vec3f(self.PREVIEW_LIGHT_COLOR))
+        elif self.type == 'SUN':
+            usd_light = UsdLux.DistantLight.Define(stage, prim_path)
+            usd_light.AddTransformOp().Set(Gf.Matrix4d(self.pose.matrix.T))
+            usd_light.GetAngleAttr().Set(self.attributes["angle"] / np.pi * 180.0)
+            usd_light.GetIntensityAttr().Set(self.attributes["energy"])
+            usd_light.GetColorAttr().Set(Gf.Vec3f(self.PREVIEW_LIGHT_COLOR))
+        elif self.type == 'AREA':
+            usd_light = UsdLux.RectLight.Define(stage, prim_path)
+            usd_light.AddTransformOp().Set(Gf.Matrix4d(self.pose.matrix.T))
+            usd_light.GetHeightAttr().Set(self.attributes["size"])
+            usd_light.GetWidthAttr().Set(self.attributes["size"])
+            usd_light.GetIntensityAttr().Set(self.attributes["energy"] * 0.01)
+            usd_light.GetColorAttr().Set(Gf.Vec3f(self.PREVIEW_LIGHT_COLOR))
+        else:
+            print(f"Warning: light {prim_path} of type {self.type} is not yet supported in USD!")
+            usd_light = UsdGeom.Xform.Define(stage, prim_path)
+            # usd_light.GetPrim().CreateAttribute('render_width', Sdf.ValueTypeNames.Int).Set(self.w)
 
 
 class Scene:
-    # We just use this sun to view shape for now (x100).
-    PREVIEW_SUN_INTENSITY = 400.0
 
     def __init__(self, cam_path: str = None):
         self.objects = {}
@@ -717,9 +880,10 @@ class Scene:
         self.gl_render_options.point_show_normal = False
 
         # These are old/new shared settings
-        self.ambient_color = (1.0, 1.0, 1.0, 1.0)
+        self.ambient_color = [1.0, 1.0, 1.0, 1.0]
         self.film_transparent = False
         self.background_image = None
+        self.background_updated = False     # Should change outside.
         self.point_size = 5.0
         self.viewport_shading = 'LIT'       # Supported: LIT, UNLIT, NORMAL
         self.up_axis = '+Y'
@@ -752,7 +916,7 @@ class Scene:
             To render in omniverse
         :return:
         """
-        from pxr import Usd, UsdGeom, Vt, Gf
+        from pxr import Usd, UsdGeom, Vt, Gf, Sdf
 
         if self.camera_intrinsic.w < self.camera_intrinsic.h:
             print("Your camera is vertical. Rendering in omniverse may not re-create the same look."
@@ -766,29 +930,32 @@ class Scene:
         else:
             UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
         stage.SetMetadata('comment', 'Exported from pycg.Scene')
-        stage.SetStartTimeCode(0.0)
-        stage.SetEndTimeCode(0.0)
+        # stage.SetCustomDataByKey('up_axis', self.up_axis)
 
         # Add Scene objects.
         for obj_name, obj in self.objects.items():
-            obj.add_usd_prim(stage, f"/scene/{obj_name}")
+            obj.add_usd_prim(stage, f"/objects/{obj_name}")
 
         # Setup camera
         usd_relative_camera = Isometry.from_axis_angle('+X', degrees=180.0)
-        cam_base_xform = UsdGeom.Xform.Define(stage, "/camera")
+        cam_base_xform = UsdGeom.Xform.Define(stage, "/camera_base")
         cam_base_xform.AddTransformOp().Set(Gf.Matrix4d(self.camera_base.matrix.T))
-        cam_prim = UsdGeom.Camera.Define(stage, "/camera/main")
+        cam_prim = UsdGeom.Camera.Define(stage, "/camera_base/relative_camera")
         cam_prim.AddTransformOp().Set(Gf.Matrix4d(
             (self.relative_camera_pose @ usd_relative_camera).matrix.T))
         self.camera_intrinsic.set_usd_attributes(cam_prim)
 
         # Setup lights
         for light_name, light in self.lights.items():
-            light.add_usd_prim(stage, f"/scene/{light_name}")
+            light.add_usd_prim(stage, f"/lights/{light_name}")
+
+        # Setup animations
+        if self.animator.is_enabled():
+            self.animator.export_usd(stage)
 
         stage.GetRootLayer().Save()
 
-    def load(self, path):
+    def import_usd(self, path):
         from pxr import Usd, Vt
         stage = Usd.Stage.Open(path)
         xform = stage.GetPrimAtPath('/hello')
@@ -839,7 +1006,10 @@ class Scene:
             up_axis = Isometry._str_to_axis(self.up_axis)
 
         if pos is None or look_at is None:
-            cplane_x = np.array([up_axis[1], -up_axis[0], 0.0])
+            if abs(up_axis[0]) < 0.01 and abs(up_axis[1]) < 0.01:
+                cplane_x = np.array([0.0, up_axis[2], -up_axis[1]])
+            else:
+                cplane_x = np.array([up_axis[1], -up_axis[0], 0.0])
             cplane_y = np.cross(up_axis, cplane_x)
             cplane_y = cplane_y / np.linalg.norm(cplane_y)
 
@@ -937,6 +1107,16 @@ class Scene:
                     Quaternion(axis=[1.0, 0.0, 0.0], degrees=180.0)).q
         return self.add_light('AREA', name, Isometry(t=(0.0, 0.0, 0.0), q=rot_q),
                               {'energy': energy, 'size': size})
+
+    def add_light_spot(self, name=None, energy=100, radius=0.1, pos=None, lookat=None):
+        if pos is None:
+            pos = (0.0, 1.0, 0.0)
+        if lookat is None:
+            lookat = (0.0, 0.0, 0.0)
+        rot_q = (Isometry.look_at(np.asarray(pos), np.asarray(lookat)).q *
+                    Quaternion(axis=[1.0, 0.0, 0.0], degrees=180.0)).q
+        return self.add_light('SPOT', name, Isometry(t=(0.0, 0.0, 0.0), q=rot_q),
+                              {'energy': energy, 'radius': radius})
 
     def auto_plane(self, config=None, dist_ratio=0.1, scale=10.0):
         min_extent, max_extent = self.get_scene_extent()
@@ -1060,17 +1240,10 @@ class Scene:
                                                        o3dr.ColorGrading.ToneMapping.LINEAR))
 
         scene.scene.set_indirect_light_intensity(self.ambient_color[-1] * 37500)
-        sun_light = self.lights.get("sun", None)    # <-- we only allow this sun name.
-        if sun_light is None:
+        if "sun" not in self.lights.keys():
             scene.scene.enable_sun_light(False)
-        elif sun_light.type == 'SUN':
-            scene.scene.set_sun_light(
-                -sun_light.pose.q.rotation_matrix[:, 2], [255, 255, 255], self.PREVIEW_SUN_INTENSITY)
         for light_name, light_obj in self.lights.items():
-            if light_obj.type == 'DIRECTIONAL':
-                scene.scene.add_directional_light('light', [1, 1, 1], np.array([0, -1, -1]), 1e5, True)
-            elif light_obj.type == 'POINT':
-                scene.scene.add_point_light('plight', [1, 1, 1], [0, 1, 1], 1e6, 1000, True)
+            light_obj.setup_filament_scene(light_name, scene.scene, self, update=False)
 
         if visualizer is not None:
             engine.show_settings = False
@@ -1097,9 +1270,17 @@ class Scene:
         for obj_uuid in self.animator.events.keys():
             if scene.has_geometry(obj_uuid):
                 scene.set_geometry_transform(obj_uuid, self.objects[obj_uuid].pose.matrix)
-            if obj_uuid == 'sun':
-                scene.scene.set_sun_light(
-                    -self.lights['sun'].pose.q.rotation_matrix[:, 2], [255, 255, 255], self.PREVIEW_SUN_INTENSITY)
+            if obj_uuid in self.lights.keys():
+                self.lights[obj_uuid].setup_filament_scene(obj_uuid, scene.scene, self, update=True)
+
+        if self.background_updated and self.background_image is not None:
+            self.background_updated = False
+            background_data = o3d.geometry.Image(self.background_image)
+            sv.set_background((1.0, 1.0, 1.0, 1.0), background_data)
+
+        # If object pose is changed, and we are still in selection mode, we may not select correct changed geometry.
+        if visualizer is not None:
+            visualizer.mouse_mode = gui.SceneWidget.Controls.ROTATE_CAMERA
 
     def record_camera_pose(self, vis):
         if not hasattr(vis, "get_view_control"):
@@ -1171,6 +1352,7 @@ class Scene:
 
         t_start, t_end = self.animator.get_range()
         for t_cur in range(t_start, t_end + 1):
+            # This will have the same time of 'render_animation'
             blender.send_eval(f"bpy.context.scene.frame_set({t_cur})")
             with tempfile.TemporaryDirectory() as render_tmp_dir_p:
                 # By default, blender will add '.png' to the input path if the suffix didn't exist.
@@ -1250,35 +1432,71 @@ class Scene:
         #     os.environ['DISPLAY'] = x11_environ
         return np.array(img)
 
+    def render_filament_animation(self, headless: bool = True):
+        renderer = o3d.visualization.rendering.OffscreenRenderer(
+            self.camera_intrinsic.w, self.camera_intrinsic.h, "", headless)
+        self._build_filament_engine(renderer)
+
+        t_start, t_end = self.animator.get_range()
+        for t_cur in range(t_start, t_end + 1):
+            self.animator.set_frame(t_cur)
+            self._update_filament_engine(renderer)
+            img = renderer.render_to_image()
+            yield t_cur, np.array(img)
+
 
 class BaseTheme:
-    def __init__(self):
-        pass
-
-    def clear(self, scene: Scene):
-        pass
+    def __init__(self, info):
+        print(textwrap.dedent(info))
 
     def apply_to(self, scene: Scene):
         raise NotImplementedError
 
 
 class IndoorRoomTheme(BaseTheme):
-    def __init__(self):
-        super().__init__()
+    class Color:
+        MILD_AQUA = (0.555, 0.769, 0.926)
+        PAPER_WOOD = ()
+        GRAY = ()
+
+    def __init__(self, base_color=Color.MILD_AQUA, sun_tilt_degrees=0.):
+        super().__init__('''
+        Indoor Room Theme v1.0 (target: blender)
+            This is ideal for rendering indoor rooms. Remember to crop the ceiling!
+            Parameters:
+                base_color: controls the color of the room.
+                sun_tilt_degrees: how the sun direction should be biased towards the current camera.
+        ''')
+        self.base_color = base_color
+        self.sun_tilt = sun_tilt_degrees / 180.0 * np.pi
 
     def apply_to(self, scene):
-        scene.add_light_sun('indoor-sun')
-        scene.additional_blender_commands = """
-            for i in D.objects:
-                i.mat.default = 1.0
-        """
+        scene.ambient_color = (1.0, 1.0, 1.0, 0.6)
+        for obj_geom in scene.objects.values():
+            if isinstance(obj_geom.geom, o3d.geometry.TriangleMesh):
+                obj_geom.geom.paint_uniform_color(self.base_color)
+            obj_geom.attributes = {}
+        scene.film_transparent = True
+        scene.lights.clear()
+        scene.add_light_sun("sun", light_energy=1.5, angle=45.7 / 180.0 * 3.14)
 
 
-class BleedShadow(BaseTheme):
+class DiffuseShadow(BaseTheme):
+    def __init__(self):
+        super().__init__('''
+        Diffuse-looking with shadow.
+        ''')
+
+
+class DiffuseTransparentShadow(BaseTheme):
     pass
 
 
-class TransparentShadow(BaseTheme):
+class NaturalEnvMaps(BaseTheme):
+    """
+    Use the env-maps here: https://polyhaven.com/
+        - Add functionality to the Scene.
+    """
     pass
 
 
@@ -1303,25 +1521,6 @@ def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=No
         my_pic = scene.render_filament(headless=True)
         multiview_pics.append(my_pic)
     return image.hlayout_images(multiview_pics)
-
-
-def render_depth(render_group_lists: list, camera_list: list, camera_intrinsic: CameraIntrinsic,
-                 backend='blender', exec_id: int = 0):
-    """
-    Render a list of depth images.
-    :param render_group_lists: List of [mesh, mesh, ...]
-    :param camera_list: List of Isometry
-    :param camera_intrinsic: Intrinsic of the camera.
-    :param exec_id: Run identifier.
-    :return: list of numpy mat
-    """
-    assert len(render_group_lists) == len(camera_list), "Camera and groups must be same"
-    if backend == 'blender':
-        return render_depth_blender(render_group_lists, camera_list, camera_intrinsic, exec_id)
-    elif backend == 'open3d':
-        return render_depth_open3d(render_group_lists, camera_list, camera_intrinsic)
-    else:
-        raise NotImplementedError
 
 
 def render_depth_open3d(render_group_lists: list, camera_list: list, camera_intrinsic: CameraIntrinsic):
@@ -1351,53 +1550,5 @@ def render_depth_open3d(render_group_lists: list, camera_list: list, camera_intr
         depth_maps.append(captured_depth)
         obid_maps.append(captured_indexes)
         engine.clear_geometries()
-
-    return depth_maps, obid_maps
-
-
-def render_depth_blender(render_group_lists: list, camera_list: list, camera_intrinsic: CameraIntrinsic,
-                         exec_id: int = 0):
-    print("Warning: Blender backend does not support parallel computing. To do so, change assets/.py")
-
-    asset_base = Path(__file__).parent / "assets"
-    blender_file_path = asset_base / "render.blend"
-    blender_script_path = asset_base / "blender_depth.py"
-
-    # Save objects and camera as file.
-    n_group = len(render_group_lists)
-
-    with tempfile.TemporaryDirectory() as render_tmp_dir_p:
-        render_tmp_dir = Path(render_tmp_dir_p)
-        with (render_tmp_dir / f"{exec_id}.camera").open('w') as cam_f:
-            for group_id in range(n_group):
-                cur_cam = camera_list[group_id]
-                cur_cam_q = cur_cam.q * Quaternion(axis=[1.0, 0.0, 0.0], degrees=180.0)
-                intr = camera_intrinsic.blender_attributes
-                cam_f.write(f"{cur_cam.t[0]} {cur_cam.t[1]} {cur_cam.t[2]} {cur_cam_q[0]} "
-                            f"{cur_cam_q[1]} {cur_cam_q[2]} {cur_cam_q[3]} "
-                            f"{intr[0]} {intr[1]} {intr[2]} {intr[3]} {intr[4]}\n")
-                for part_id, part_mesh in enumerate(render_group_lists[group_id]):
-                    o3d.io.write_triangle_mesh(str(render_tmp_dir / f"{exec_id}-{group_id}-{part_id}.obj"),
-                                               part_mesh)
-
-                # o3d.visualization.draw_geometries(render_group_lists[group_id] +
-                #                                   [o3d.geometry.TriangleMesh.create_coordinate_frame().transform(Isometry(cur_cam_q, cur_cam.t).matrix),
-                #                                    o3d.geometry.TriangleMesh.create_coordinate_frame()])
-
-        # Perform rendering.
-        os.system(f"{BLENDER_EXEC_PATH} --background {blender_file_path} --python {blender_script_path} -- "
-                  f"--asset {render_tmp_dir} --output {render_tmp_dir} --exec {exec_id} --num {n_group}")
-
-        # Load in depth map
-        depth_maps = []
-        obid_maps = []
-        for group_id in range(n_group):
-            exr_depth = cv2.imread(str(render_tmp_dir / f"{exec_id}-{group_id}.exr"),
-                                   cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
-            exr_depth = exr_depth[:, :, 0]
-            depth_maps.append(exr_depth)
-            exr_obid = cv2.imread(str(render_tmp_dir / f"{exec_id}-{group_id}-ob.exr"), cv2.IMREAD_UNCHANGED)
-            exr_obid = exr_obid[:, :, 0].astype(int)
-            obid_maps.append(exr_obid)
 
     return depth_maps, obid_maps

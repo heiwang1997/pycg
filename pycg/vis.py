@@ -1192,6 +1192,13 @@ def from_file(path: str or Path, compute_normal: bool = True):
     suffix = path.suffix
     if suffix in [".xyz", ".xyzn", ".xyzrgb", ".pts", ".pcd"]:
         geom = o3d.io.read_point_cloud(str(path))
+    elif suffix in [".bnpts", ".npts"]:
+        # M.Kazhdan format of input data (point cloud)
+        if suffix[1] == "b":
+            data = np.fromfile(path, dtype=np.float32).reshape(-1, 6)
+        else:
+            data = np.genfromtxt(path)
+        geom = pointcloud(data[:, :3], normal=data[:, 3:])
     elif suffix in [".stl", ".obj", ".off", ".gltf"]:
         geom = o3d.io.read_triangle_mesh(str(path))
     elif suffix == ".ply":

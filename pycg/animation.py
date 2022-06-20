@@ -404,6 +404,13 @@ class AnimatorBase:
     def get_value(self, t, raw: bool = False):
         raise NotImplementedError
 
+    def send_blender(self, uuidx: str):
+        # TODO: This should also consider attrib_name.
+        raise NotImplementedError
+
+    def export_usd_prim(self, prim, attrib_name: str):
+        raise NotImplementedError
+
 
 class FreePoseAnimator(AnimatorBase):
 
@@ -510,6 +517,16 @@ class FreePoseAnimator(AnimatorBase):
         else:
             self.interp_q.send_blender(uuidx, 'rotation_quaternion', None)
 
+    def export_usd_prim(self, prim, attrib_name: str):
+        assert attrib_name == "pose"
+
+        # Clear previous transform if exists.
+        prim.RemoveTransformOp()
+
+        # TODO: Implement this.
+
+        raise NotImplementedError
+
 
 class SpinPoseAnimator(AnimatorBase):
     def __init__(self, interp_type: InterpType, center, spin_axis: str = '+Y'):
@@ -586,6 +603,27 @@ class SceneAnimator:
         for obj_uuid, obj_attribs in self.events.items():
             for attrib_name, attrib_interp in obj_attribs.items():
                 attrib_interp.send_blender(obj_uuid)
+
+    def export_usd(self, stage):
+        s, e = self.get_range()
+        stage.SetStartTimeCode(s)
+        stage.SetEndTimeCode(e)
+        for obj_uuid, obj_attribs in self.events.items():
+            for attrib_name, attrib_interp in obj_attribs.items():
+                if attrib_interp.get_first_t() is None:
+                    continue
+                if obj_uuid == "relative_camera":
+                    usd_prim = stage.GetPrimAtPath("/camera_base/relative_camera")
+                elif obj_uuid == "camera_base":
+                    usd_prim = stage.GetPrimAtPath("/camera_base")
+                elif obj_uuid in self.scene.objects.keys():
+                    usd_prim = stage.GetPrimAtPath(f"/scene/{obj_uuid}")
+                else:
+                    raise NotImplementedError
+                attrib_interp.export_usd_prim(usd_prim, attrib_name)
+
+    def import_usd(self):
+        pass
 
     def set_frame(self, t):
         for obj_uuid, obj_attribs in self.events.items():
