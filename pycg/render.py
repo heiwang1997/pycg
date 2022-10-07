@@ -688,6 +688,7 @@ class SceneObject:
             - material.roughness: 0.0-1.0
             - material.checker: {"on": True/False, "color_a": (rgba), "color_b": (rgbd), "scale": 1.0}
             - material.normal: {"on": True/False}
+            - material.ao: {"on": True/False, "gamma": 0.0 (the larger the more contrast), "strength": 0.5 (0~1)}
             - cycles_visibility.camera: True/False
             - cycles_visibility.shadow: True/False
             - cycles_visibility.diffuse: True/False
@@ -745,7 +746,7 @@ class SceneObject:
             if self.attributes["material.normal"]["on"]:
                 mat.shader = 'normals'
 
-        if "smooth_shading" in self.attributes:
+        if "smooth_shading" in self.attributes and isinstance(self.geom, o3d.geometry.TriangleMesh):
             if self.attributes["smooth_shading"]:
                 if not self.geom.has_vertex_normals():
                     self.geom.compute_vertex_normals()
@@ -927,9 +928,25 @@ class Scene:
         # These are old-api specific settings
         self.gl_render_options = o3d.visualization.RenderOption()
         self.gl_render_options.point_show_normal = False
+        self.filament_show_skybox = False
 
-        # These are old/new shared settings
+        # Ambient color / Environment texture behave differently with different engines:
+        #   - Blender: if env_map is None, then use ambient_color as world node, with the last element being the strength
+        #              otherwise, ambient_color is simply ignored.
+        #   - Filament: env_map is ignored. ambient_color is used to determine background color and IBL strength.
+        #              env_map_filament is for choosing the IBL that lights the surface
+        #     (how to use new env map in filament) https://google.github.io/filament/webgl/tutorial_redball.html
+        #     Filament uses *_ibl.ktx and *_skybox.ktx as the format for env-map. The tool that converts from HDR
+        #   Equilateral map to ktx cubemap is named 'cmgen', located at: Open3D/build/filament/src/ext_filament/bin
+        #   Usage: cmgen -x [OUT_DIR] --format=ktx --size=256 [BLUR OPTIONS] [IN.png / IN.hdr]
+        #     After this, put the ktx files into Open3D's installation directory under Resource/
         self.ambient_color = [1.0, 1.0, 1.0, 1.0]
+        self.env_map = None
+        self.env_map_rotation = 'auto'
+
+        self._env_map_filament = ""
+        self.set_filament_env_map("default")
+
         self.film_transparent = False
         self.background_image = None
         self.background_updated = False     # Should change outside.
@@ -958,6 +975,13 @@ class Scene:
     @camera_pose.setter
     def camera_pose(self, value):
         self.relative_camera_pose = self.camera_base.inv() @ value
+
+    def set_filament_env_map(self, name: str):
+        default_path = Path(o3d.__path__[0]) / "resources"
+        if (default_path / f"{name}_ibl.ktx").exists():
+            self._env_map_filament = str(default_path / name)
+        else:
+            raise FileNotFoundError
 
     def export(self, path):
         """
@@ -1266,8 +1290,6 @@ class Scene:
         else:
             sv.set_background(list(self.ambient_color[:3]) + [1.0], None)
 
-        sv.show_skybox(False)
-
         if visualizer is not None:
             # Although we already set material above, the following will make the UI correct.
             visualizer.point_size = int(self.point_size)
@@ -1287,8 +1309,18 @@ class Scene:
         import open3d.visualization.rendering as o3dr
         scene.view.set_color_grading(o3dr.ColorGrading(o3dr.ColorGrading.Quality.ULTRA,
                                                        o3dr.ColorGrading.ToneMapping.LINEAR))
+        # TODO: Fix Shadow Bug
+        # scene.view.set_shadowing(True, scene.view.ShadowType.VSM)
 
+        sv.show_skybox(self.filament_show_skybox)
+        scene.scene.set_indirect_light(self._env_map_filament)
         scene.scene.set_indirect_light_intensity(self.ambient_color[-1] * 37500)
+        if self.env_map_rotation == "auto":
+            if self.up_axis == '+Z':
+                scene.scene.set_indirect_light_rotation(Isometry.from_axis_angle('z', -90.0).matrix)
+        else:
+            scene.scene.set_indirect_light_rotation(Isometry.from_euler_angles(*self.env_map_rotation).matrix)
+
         if "sun" not in self.lights.keys():
             scene.scene.enable_sun_light(False)
         for light_name, light_obj in self.lights.items():
@@ -1313,6 +1345,8 @@ class Scene:
             sv = visualizer                 # o3d.visualization.O3DVisualizer
         else:
             raise NotImplementedError
+
+        sv.show_skybox(self.filament_show_skybox)
 
         if "relative_camera" in self.animator.events.keys() or "camera_base" in self.animator.events.keys():
             engine.setup_camera(self.camera_intrinsic.to_open3d_intrinsic(), self.camera_pose.inv().matrix)
@@ -1368,14 +1402,21 @@ class Scene:
         blender.send_entity_pose("camera_base", rotation_mode='QUATERNION', rotation_value=self.camera_base.q.q.tolist(),
                                  location_value=self.camera_base.t.tolist())
         blender.send_camera(self.relative_camera_pose, self.camera_intrinsic)
-        blender.send_eval(f"bg_node=bpy.data.worlds['World'].node_tree.nodes['Background'];"
-                          f"bg_node.inputs[0].default_value=({self.ambient_color[0]},{self.ambient_color[1]},{self.ambient_color[2]},1);"
-                          f"bg_node.inputs[1].default_value={self.ambient_color[3]}")
-        blender.send_eval(f"bpy.context.scene.render.film_transparent={self.film_transparent}")
+        if self.env_map is not None:
+            if self.env_map_rotation == 'auto':
+                rotation = [0.0, 0.0, 0.0] if self.up_axis != '+Y' else [-np.pi / 2., 0.0, 0.0]
+            else:
+                rotation = self.env_map_rotation
+            blender.send_envmap(self.env_map, rotation=rotation)
+        else:
+            blender.send_eval(f"bg_node=bpy.data.worlds['World'].node_tree.nodes['Background'];"
+                              f"bg_node.inputs[0].default_value=({self.ambient_color[0]},{self.ambient_color[1]},{self.ambient_color[2]},1);"
+                              f"bg_node.inputs[1].default_value={self.ambient_color[3]}")
+            blender.send_eval(f"bpy.context.scene.render.film_transparent={self.film_transparent}")
 
     def render_blender(self, do_render: bool = True, save_path: str = None, quality: int = 128):
         self._setup_blender_static()
-        if not do_render:
+        if not do_render or 'PAUSE_BEFORE_RENDER' in os.environ.keys():
             # Wait for user to respond
             blender.poll_notified()
 
@@ -1394,7 +1435,7 @@ class Scene:
     def render_blender_animation(self, do_render: bool = True, quality: int = 128):
         self._setup_blender_static()
         self.animator.send_blender()
-        if not do_render:
+        if not do_render or 'PAUSE_BEFORE_RENDER' in os.environ.keys():
             blender.poll_notified()
 
         t_start, t_end = self.animator.get_range()

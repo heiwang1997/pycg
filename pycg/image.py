@@ -282,6 +282,10 @@ def add_alpha_color(img: np.ndarray, alpha_color, tol: float = 2 / 255.):
 
 
 def read(path):
+    path = Path(path)
+    if path.suffix == ".hdr":
+        import imageio
+        return np.asarray(imageio.v2.imread(path))
     with Image.open(path) as im:
         return np.asarray(im)
 

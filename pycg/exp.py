@@ -18,6 +18,7 @@ import os
 from contextlib import ContextDecorator
 import weakref
 import functools
+import inspect
 
 # if 'MEM_PROFILE' in os.environ.keys():
 #     from pytorch_memlab.line_profiler.profile import global_line_profiler
@@ -26,6 +27,8 @@ import functools
 
 # Load and cache PT_PROFILE key
 enable_pt_profile = 'PT_PROFILE' in os.environ.keys()
+if enable_pt_profile and 'CUDA_LAUNCH_BLOCKING' not in os.environ.keys():
+    print(" -- Warning: PT_PROFILE set but CUDA_LAUNCH_BLOCKING is not set! --")
 
 
 def parse_config_json(json_path: Path, args: argparse.Namespace = None):
@@ -163,7 +166,13 @@ class ArgumentParserX(argparse.ArgumentParser):
         if exec_code is not None:
             for exec_cmd in exec_code:
                 exec_cmd = "_args." + exec_cmd.strip()
-                exec(exec_cmd)
+                try:
+                    exec(exec_cmd)
+                except Exception as e:
+                    lhs, rhs = exec_cmd.split('=')
+                    exec_cmd = lhs + "='" + rhs + "'"
+                    print("CMD boosted:", exec_cmd)
+                    exec(exec_cmd)
         return _args
 
 
@@ -554,12 +563,42 @@ def pt_profile(func):
         return func
 
 
+# Monkey Patch pytorch_memlab:
+if 'MEM_PROFILE' in os.environ.keys():
+    mem_profile_spec = os.environ['MEM_PROFILE']
+    mem_threshold = 0
+    if ',' in mem_profile_spec:
+        mem_profile_spec, mem_threshold = mem_profile_spec.split(',')
+    mem_profile_spec = int(mem_profile_spec)
+    mem_threshold = int(mem_threshold)
+
+    if mem_profile_spec == 1:
+
+        from pytorch_memlab.line_profiler.line_records import RecordsDisplay, readable_size
+
+        def new_repr(self):
+            recorded_func_names = self._line_records.index.levels[0]
+            func_info = []
+            for func_name in recorded_func_names:
+                func_mem_info = self._line_records.loc[func_name].active_bytes
+                start_mem = func_mem_info.iloc[0].item()
+                peak_mem = func_mem_info.max().item()
+                end_mem = func_mem_info.iloc[-1].item()
+                if peak_mem - start_mem < mem_threshold * 1024 * 1024:
+                    continue
+                func_info.append(f"{func_name} +{readable_size(end_mem - start_mem)} "
+                                 f"PEAK = +{readable_size(peak_mem - start_mem)} ({readable_size(peak_mem)})")
+            return '++ (PF) ++ ' + '\n'.join(func_info) + '\n'
+
+        RecordsDisplay.__repr__ = new_repr
+
+
 def mem_profile(func=None, every=-1, active_only=True):
     """
     Usage:
         - Add a `@pycg.exp.mem_profile' to the function you want to test
         -   Optionally add parameters '@pycg.exp.mem_profile(every=1)'
-        - Run the script with environment variable 'MEM_PROFILE=1' set.
+        - Run the script with environment variable 'MEM_PROFILE=1,128' or 'MEM_PROFILE=2' set.
         - When the program ends, it will print the profiling result.
     """
     if 'MEM_PROFILE' in os.environ.keys():
@@ -584,11 +623,43 @@ def mem_profile(func=None, every=-1, active_only=True):
         return func
 
 
+def mem_profile_class():
+    """
+    Class decorator, this allows you to find out which function causes the most memory increase!
+    """
+    # https://stackoverflow.com/questions/16626789/functools-partial-on-class-method
+    # def new_func_closure(method_name, method):
+    #     import torch
+    #
+    #     def call_new_func(*args, **kwargs):
+    #         begin_mem = torch.cuda.memory_allocated()
+    #         res = method(*args, **kwargs)
+    #         end_mem = torch.cuda.memory_allocated()
+    #         cost_mem = (end_mem - begin_mem) / 1024 / 1024
+    #         if cost_mem > mem_th_mb:
+    #             print(f"Call {method_name} takes {cost_mem:.2f}MB memory. (Current = {end_mem / 1024 / 1024:.2f}MB)")
+    #         return res
+    #     return call_new_func
+
+    def transform_cls(cls):
+        methods = [func for func in dir(cls) if not func.startswith("_")]
+        # methods = inspect.getmembers(cls, inspect.ismethod)
+        for method in methods:
+            old_func = getattr(cls, method)
+            if not callable(old_func):
+                continue
+            # setattr(cls, method, new_func_closure(method, old_func))
+            setattr(cls, method, mem_profile(old_func, every=1))
+        return cls
+    return transform_cls
+
+
 def memory_usage(tensor):
     import torch
     if isinstance(tensor, torch.Tensor):
         size_mb = tensor.element_size() * tensor.nelement() / 1024 / 1024
-        return f"Torch tensor {list(tensor.size())}, memory = {size_mb:.2f}MB."
+        size_storage = sys.getsizeof(tensor.storage()) / 1024 / 1024
+        return f"Torch tensor {list(tensor.size())}, logical {size_mb:.2f}MB, actual {size_storage:.2f}MB."
     else:
         return "Memory usage not supported."
 

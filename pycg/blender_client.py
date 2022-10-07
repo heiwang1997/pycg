@@ -213,6 +213,23 @@ def send_light(scene_light, uuidx: str = None):
     return res_dict['uuid']
 
 
+def send_envmap(data: np.ndarray, rotation: list = None):
+    assert data.ndim == 3 and data.shape[2] == 3
+    if data.dtype == np.uint8:
+        data = data.astype(np.float64) / 255.
+
+    cmd_dict = {'cmd': 'envmap'}
+    cmd_dict['data'] = data
+    if rotation is None:
+        # XYZ euler angle (in radian)
+        cmd_dict['rotation'] = [0.0, 0.0, 0.0]
+    else:
+        cmd_dict['rotation'] = rotation
+    _blender_connection.send(cmd_dict)
+    res_dict = _blender_connection.receive(nowait=False)
+    assert res_dict['result'] == 'success'
+
+
 def send_eval(script: str):
     _blender_connection.send({'cmd': 'eval', 'script': script})
     res_dict = _blender_connection.receive(nowait=False)

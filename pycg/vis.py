@@ -311,7 +311,7 @@ def pointflow(base_pc: np.ndarray, base_flow: np.ndarray, dest_pc: np.ndarray = 
 
 
 def correspondence(source_pc: np.ndarray, target_pc: np.ndarray, matches=None, match_color: np.ndarray = None,
-                   subsampled_ratio=1.0, gap=None, match_color_normalize: bool = False):
+                   subsampled_ratio=1.0, gap=None, match_color_normalize: bool = False, **color_kwargs):
     if isinstance(source_pc, o3d.geometry.PointCloud):
         source_pc = np.asarray(source_pc.points)
     if isinstance(target_pc, o3d.geometry.PointCloud):
@@ -339,15 +339,17 @@ def correspondence(source_pc: np.ndarray, target_pc: np.ndarray, matches=None, m
                                       replace=False)
     matches = matches[match_sub_inds, :]
     matches[:, 1] += source_pc.shape[0]
+
     source_pcd = o3d.geometry.PointCloud()
     source_pcd.points = o3d.utility.Vector3dVector(source_pc.astype(float).copy())
     source_pcd.paint_uniform_color([1.0, 0.0, 0.0])
     target_pcd = o3d.geometry.PointCloud()
     target_pcd.points = o3d.utility.Vector3dVector(target_pc.astype(float).copy() + gap)
     target_pcd.paint_uniform_color([0.0, 1.0, 0.0])
-    corres_lineset = o3d.geometry.LineSet(
-        points=o3d.utility.Vector3dVector(np.vstack([np.asarray(source_pcd.points), np.asarray(target_pcd.points)])),
-        lines=o3d.utility.Vector2iVector(matches)
+
+    corres_lineset = lineset(
+        np.vstack([source_pc.astype(float), target_pc.astype(float).copy() + gap]), matches,
+        **color_kwargs
     )
     if match_color is not None:
         match_color = match_color[match_sub_inds]
@@ -364,7 +366,7 @@ def correspondence(source_pc: np.ndarray, target_pc: np.ndarray, matches=None, m
             match_color[match_color < 0] = color_map.shape[0] - 1
             corres_lineset.colors = o3d.utility.Vector3dVector(color_map[match_color])
 
-    return [source_pcd, target_pcd, corres_lineset]
+    return corres_lineset
 
 
 def multiview_correspondence(pcs: List[np.ndarray], matches: Dict[Tuple, np.ndarray], subsampled_ratio: float = 0.2,
@@ -1297,6 +1299,12 @@ def from_file(path: str or Path, compute_normal: bool = True):
         # Determine filetype by peaking into ply header
         with path.open("rb") as f:
             header_data = PlyData._parse_header(f)
+        # ply_data = PlyData.read(temp_dir / "out.ply")
+        # tri = np.vstack(ply_data['face'].data['vertex_indices'])
+        # vx = np.asarray(ply_data['vertex'].data['x'])
+        # vy = np.asarray(ply_data['vertex'].data['y'])
+        # vz = np.asarray(ply_data['vertex'].data['z'])
+        # vw = np.asarray(ply_data['vertex'].data['value'])
         element_keys = [t.name for t in header_data]
         if 'face' in element_keys:
             geom = o3d.io.read_triangle_mesh(str(path))
@@ -1325,6 +1333,9 @@ def from_file(path: str or Path, compute_normal: bool = True):
 
 def to_file(geom, path: str or Path):
     # A handy function
+    path = Path(path)
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True)
     if isinstance(geom, o3d.geometry.PointCloud):
         o3d.io.write_point_cloud(str(path), geom)
     elif isinstance(geom, o3d.geometry.TriangleMesh):
