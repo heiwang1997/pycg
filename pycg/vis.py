@@ -76,6 +76,11 @@ def ensure_from_torch(arr, dim=2):
                       f"We only retrieve the first batch.")
             arr = arr[0]
         arr = arr.detach().cpu().numpy()
+    elif isinstance(arr, list):
+        arr = np.asarray(arr)
+    assert isinstance(arr, np.ndarray)
+    if arr.ndim == dim - 1:
+        arr = arr[None, ...]
     return arr
 
 
@@ -493,28 +498,35 @@ def camera(transform: Isometry = Isometry(), wh_ratio: float = 4.0 / 3.0, scale:
 def arrow(base: np.ndarray, target: np.ndarray,
           scale: float = 1.0, resolution: int = 5, fix_cone_height: float = None, cone_enlarge_ratio: float = 4.0,
           color_id: int = 0, **cmap_kwargs):
-    if isinstance(base, list):
-        base = np.asarray(base)
-    if isinstance(target, list):
-        target = np.asarray(target)
+    base = ensure_from_torch(base, 2)
+    target = ensure_from_torch(target, 2)
 
-    arrow_iso = Isometry.look_at(base, target)
-    arrow_len = np.linalg.norm(target - base)
-    base_radius = scale * 0.05
+    n_verts = 0
+    arrow_verts = []
+    arrow_faces = []
+    for b, t in zip(base, target):
+        arrow_iso = Isometry.look_at(b, t)
+        arrow_len = np.linalg.norm(t - b)
+        base_radius = scale * 0.05
 
-    if fix_cone_height is not None:
-        cone_height = min(fix_cone_height, arrow_len * 0.9)
-    else:
-        cone_height = 0.3 * arrow_len
+        if fix_cone_height is not None:
+            cone_height = min(fix_cone_height, arrow_len * 0.9)
+        else:
+            cone_height = 0.3 * arrow_len
 
-    arrow_obj = o3d.geometry.TriangleMesh.create_arrow(resolution=resolution,
-                                                       cylinder_height=arrow_len - cone_height,
-                                                       cone_height=cone_height,
-                                                       cone_radius=cone_enlarge_ratio * base_radius,
-                                                       cylinder_radius=base_radius,
-                                                       cylinder_split=1)
-    arrow_obj.transform(arrow_iso.matrix)
-    return colored_mesh(arrow_obj, ucid=color_id, **cmap_kwargs)
+        arrow_obj = o3d.geometry.TriangleMesh.create_arrow(resolution=resolution,
+                                                           cylinder_height=arrow_len - cone_height,
+                                                           cone_height=cone_height,
+                                                           cone_radius=cone_enlarge_ratio * base_radius,
+                                                           cylinder_radius=base_radius,
+                                                           cylinder_split=1)
+        arrow_obj.transform(arrow_iso.matrix)
+
+        arrow_verts.append(np.asarray(arrow_obj.vertices))
+        arrow_faces.append(np.asarray(arrow_obj.triangles) + n_verts)
+        n_verts += len(arrow_obj.vertices)
+
+    return colored_mesh(np.concatenate(arrow_verts), np.concatenate(arrow_faces), ucid=color_id, **cmap_kwargs)
 
 
 def sphere_from_pc(pcd: o3d.geometry.PointCloud, radius: float = 0.02, resolution: int = 5):
@@ -641,6 +653,12 @@ def oriented_pointcloud(pcd: o3d.geometry.PointCloud, knn: int = None, radius: f
     return pcd
 
 
+def sphere(center: np.ndarray = np.zeros((3, )), radius: float = 1.0, resolution: int = 10, ucid: int = None):
+    return pointcloud(
+        center[None, :], is_sphere=True, ucid=ucid, sphere_radius=radius, sphere_resolution=resolution
+    )
+
+
 def pointcloud(pc, cid: np.ndarray = None, color: np.ndarray = None, ucid: int = None, cmap='tab10',
                normal: np.ndarray = None, estimate_normals: bool = False, estimate_normals_radius=None, estimate_normals_nn=16,
                double_layer: bool = False, double_layer_delta: float = 0.01,
@@ -760,7 +778,8 @@ def mesh(mesh_or_vertices: Union[np.ndarray, torch.Tensor, o3d.geometry.Triangle
          triangles: Union[np.ndarray, torch.Tensor] = None,
          color: np.ndarray = None,
          cid: Union[np.ndarray, torch.Tensor] = None,
-         ucid: int = None, cmap: str = 'tab10'):
+         ucid: int = None, cmap: str = 'tab10',
+         cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False):
     if isinstance(mesh_or_vertices, o3d.geometry.TriangleMesh):
         assert triangles is None
         vertices = np.asarray(mesh_or_vertices.vertices).copy()
@@ -784,6 +803,13 @@ def mesh(mesh_or_vertices: Union[np.ndarray, torch.Tensor, o3d.geometry.Triangle
     if ucid is not None:
         u_color = map_quantized_color(ucid, cmap=cmap)
         color = np.repeat(u_color[None, :], vertices.shape[0], 0)
+
+    if cfloat is not None:
+        if cfloat_normalize:
+            cfloat_min, cfloat_max = cfloat.min(), cfloat.max()
+            print(f"cfloat normalize: min = {cfloat_min}, max = {cfloat_max}")
+            cfloat = (cfloat - cfloat_min) / (cfloat_max - cfloat_min + 1.0e-6)
+        color = matplotlib.cm.get_cmap(cfloat_cmap)(cfloat)[:, :3]
 
     if color is not None:
         mesh.vertex_colors = o3d.utility.Vector3dVector(color)
@@ -814,7 +840,9 @@ def transformed_oobb(oobb: o3d.geometry.OrientedBoundingBox, iso: Isometry):
 def lineset(linset_or_points: Union[np.ndarray, torch.Tensor, o3d.geometry.LineSet],
             lines: Union[np.ndarray, torch.Tensor] = None,
             cid: Union[np.ndarray, torch.Tensor] = None,
-            ucid: int = 0, cmap: str = 'tab10'):
+            ucid: int = 0, cmap: str = 'tab10',
+            cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False,
+            color: Union[np.ndarray, torch.Tensor] = None):
     if isinstance(linset_or_points, o3d.geometry.LineSet):
         assert lines is None
         points = np.asarray(linset_or_points.points).copy()
@@ -827,14 +855,25 @@ def lineset(linset_or_points: Union[np.ndarray, torch.Tensor, o3d.geometry.LineS
         points=o3d.utility.Vector3dVector(points),
         lines=o3d.utility.Vector2iVector(lines))
 
+    if color is not None:
+        color = ensure_from_torch(color, 2)
+
     if cid is not None:
         cid = ensure_from_torch(cid, dim=1).astype(int)
         color = map_quantized_color(cid, cmap=cmap)
         assert color.shape[0] == lines.shape[0]
-    else:
+
+    if ucid is not None:
         # Use ucid
         u_color = map_quantized_color(ucid, cmap=cmap)
         color = np.repeat(u_color[None, :], lines.shape[0], 0)
+
+    if cfloat is not None:
+        if cfloat_normalize:
+            cfloat_min, cfloat_max = cfloat.min(), cfloat.max()
+            print(f"cfloat normalize: min = {cfloat_min}, max = {cfloat_max}")
+            cfloat = (cfloat - cfloat_min) / (cfloat_max - cfloat_min + 1.0e-6)
+        color = matplotlib.cm.get_cmap(cfloat_cmap)(cfloat)[:, :3]
 
     geom.colors = o3d.utility.Vector3dVector(color)
     return geom
@@ -904,7 +943,9 @@ def wireframe(mesh: o3d.geometry.TriangleMesh):
 
 def wireframe_bbox(extent_min=None, extent_max=None, solid=False, tube=False, tube_radius=0.001,
                    cid: Union[np.ndarray, torch.Tensor] = None,
-                   ucid: int = 0, cmap: str = 'tab10'):
+                   ucid: int = 0, cmap: str = 'tab10',
+                   cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False,
+                   color: Union[np.ndarray, torch.Tensor] = None):
     if extent_min is None:
         extent_min = [0.0, 0.0, 0.0]
     if extent_max is None:
@@ -927,6 +968,12 @@ def wireframe_bbox(extent_min=None, extent_max=None, solid=False, tube=False, tu
     if cid is not None:
         cid = ensure_from_torch(cid, dim=1).astype(int)
 
+    if cfloat is not None:
+        cfloat = ensure_from_torch(cfloat, dim=1)
+
+    if color is not None:
+        color = ensure_from_torch(color)
+
     min_x, min_y, min_z = extent_min[:, 0], extent_min[:, 1], extent_min[:, 2]
     max_x, max_y, max_z = extent_max[:, 0], extent_max[:, 1], extent_max[:, 2]
     all_points = np.stack([
@@ -941,21 +988,37 @@ def wireframe_bbox(extent_min=None, extent_max=None, solid=False, tube=False, tu
             [0, 2], [4, 6], [1, 3], [5, 7]
         ])
         line_indices = (line_indices[None, ...] + (np.arange(extent_min.shape[0]) * 8)[:, None, None]).reshape(-1, 2)
-        geom = lineset(all_points, line_indices,
-                       cid=np.repeat(cid[:, None], repeats=12, axis=1).flatten() if cid is not None else None,
-                       ucid=ucid, cmap=cmap)
+        geom = lineset(
+            all_points, line_indices,
+            cid=np.repeat(cid[:, None], repeats=12, axis=1).flatten() if cid is not None else None,
+            ucid=ucid, cmap=cmap,
+            cfloat=np.repeat(cfloat[:, None], repeats=12, axis=1).flatten()
+            if cfloat is not None else None,
+            cfloat_cmap=cfloat_cmap,
+            cfloat_normalize=cfloat_normalize,
+            color=np.repeat(color[:, None, :], repeats=12, axis=1).reshape((-1, color.shape[1]))
+            if color is not None else None
+        )
         if tube:
             geom = lineset_mesh(geom, tube_radius)
     else:
         cube_indices = np.asarray([
             [0, 4, 5], [0, 5, 1], [4, 6, 7], [4, 7, 5],
             [2, 7, 6], [2, 3, 7], [0, 3, 2], [0, 1, 3],
-            [7, 1 ,5], [3, 1, 7], [2, 6, 0], [0, 6, 4]
+            [7, 1, 5], [3, 1, 7], [2, 6, 0], [0, 6, 4]
         ])
         cube_indices = (cube_indices[None, ...] + (np.arange(extent_min.shape[0]) * 8)[:, None, None]).reshape(-1, 3)
-        geom = colored_mesh(all_points, cube_indices,
-                            cid=np.repeat(cid[:, None], repeats=8, axis=1).flatten() if cid is not None else None,
-                            ucid=ucid, cmap=cmap)
+        geom = colored_mesh(
+            all_points, cube_indices,
+            cid=np.repeat(cid[:, None], repeats=8, axis=1).flatten() if cid is not None else None,
+            ucid=ucid, cmap=cmap,
+            cfloat=np.repeat(cfloat[:, None], repeats=8, axis=1).flatten()
+            if cfloat is not None else None,
+            cfloat_cmap=cfloat_cmap,
+            cfloat_normalize=cfloat_normalize,
+            color=np.repeat(color[:, None, :], repeats=8, axis=1).reshape((-1, color.shape[1]))
+            if color is not None else None
+        )
 
     return geom
 
@@ -1130,14 +1193,20 @@ def show_segmentation_motion_interactive(pc: np.ndarray, segm: np.ndarray, motio
     engine.destroy_window()
 
 
-def depth_pointcloud(depth: np.ndarray, rgb: np.ndarray = None, fx=None, fy=None, cx=None, cy=None, depth_scale=1000.0,
-                     pose: Isometry = Isometry(), compute_normal: bool = False):
+def depth_pointcloud(depth: np.ndarray, normal: np.ndarray = None, rgb: np.ndarray = None, fx=None, fy=None, cx=None, cy=None, depth_scale=1000.0,
+                     pose: Isometry = Isometry(), compute_normal: bool = False, use_numpy: bool = False, numpy_norm_ray: bool = False):
     img_h, img_w = depth.shape
     if depth.dtype == np.uint16:
         depth = depth.astype(np.float32) / depth_scale
 
     if depth.dtype == float:
         depth = depth.astype(np.float32)
+
+    if normal is not None:
+        assert use_numpy, "You have to set use_numpy=True to ensure a correct building"
+        if compute_normal:
+            print("Warning: re-computing normals even if it's provided...")
+        assert normal.shape[0] == img_h and normal.shape[1] == img_w and normal.shape[2] == 3
 
     if cx is None or cy is None:
         cx = img_w / 2
@@ -1146,17 +1215,39 @@ def depth_pointcloud(depth: np.ndarray, rgb: np.ndarray = None, fx=None, fy=None
     if fx is None or fy is None:
         fx = fy = cx        # Assume 90 degrees fovx.
 
-    intrinsic = o3d.camera.PinholeCameraIntrinsic()
-    intrinsic.set_intrinsics(width=img_w, height=img_h, fx=fx, fy=fy, cx=cx, cy=cy)
-    depth = o3d.geometry.Image(depth)
-    if rgb is not None:
-        assert rgb.shape == (img_h, img_w, 3)
-        rgbd_image = o3d.geometry.RGBDImage()
-        rgbd_image.depth = depth
-        rgbd_image.color = o3d.geometry.Image(rgb)
-        pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsic, pose.inv().matrix)
+    if use_numpy:
+        # Used also for future reference.
+        xx, yy = np.meshgrid(np.arange(0, img_w), np.arange(0, img_h))
+        mg = np.concatenate((xx.reshape(1, -1), yy.reshape(1, -1)), axis=0)
+        mg_homo = np.vstack((mg, np.ones((1, mg.shape[1]))))
+        pc = np.matmul(np.linalg.inv(np.array([
+            [fx, 0, cx], [0, fy, cy], [0, 0, 1]
+        ])), mg_homo)
+        if numpy_norm_ray:
+            pc /= np.linalg.norm(pc, axis=0)
+        depth_flat = depth.ravel()
+        pc = depth_flat[np.newaxis, :] * pc
+        # Crop invalid observations.
+        pc_mask = np.logical_and(np.isfinite(depth_flat), depth_flat > 0.0)
+        pc = pc[:, pc_mask].T
+        if rgb is not None:
+            rgb = rgb.reshape(-1, rgb.shape[-1])[pc_mask, :]
+        if normal is not None:
+            normal = normal.reshape(-1, normal.shape[-1])[pc_mask, :]
+        pcd = pointcloud(pc, color=rgb, normal=normal)
+        pcd.transform(pose.matrix)
     else:
-        pcd = o3d.geometry.PointCloud.create_from_depth_image(depth, intrinsic, pose.inv().matrix)
+        intrinsic = o3d.camera.PinholeCameraIntrinsic()
+        intrinsic.set_intrinsics(width=img_w, height=img_h, fx=fx, fy=fy, cx=cx, cy=cy)
+        depth = o3d.geometry.Image(depth)
+        if rgb is not None:
+            assert rgb.shape == (img_h, img_w, 3)
+            rgbd_image = o3d.geometry.RGBDImage()
+            rgbd_image.depth = depth
+            rgbd_image.color = o3d.geometry.Image(rgb)
+            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsic, pose.inv().matrix)
+        else:
+            pcd = o3d.geometry.PointCloud.create_from_depth_image(depth, intrinsic, pose.inv().matrix)
 
     if compute_normal:
         pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=16))

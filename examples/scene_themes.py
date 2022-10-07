@@ -25,3 +25,6 @@ if __name__ == '__main__':
     scene.preview(use_new_api=True)
 
     image.write(scene.render_blender(), "out/theme_room.png")
+
+    # scene.viewport_shading = 'NORMAL'
+    # image.write(scene.render_filament())

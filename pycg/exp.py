@@ -1,3 +1,5 @@
+import bdb
+import shutil
 import sys
 import re
 from collections import OrderedDict, defaultdict
@@ -14,6 +16,8 @@ from typing import Tuple, Union
 from omegaconf import OmegaConf
 import os
 from contextlib import ContextDecorator
+import weakref
+import functools
 
 # if 'MEM_PROFILE' in os.environ.keys():
 #     from pytorch_memlab.line_profiler.profile import global_line_profiler
@@ -194,12 +198,16 @@ class TorchLossMeter:
         for n, (w, l) in self.loss_dict.items():
             yield n, w * l
 
-    def get_printable_mean(self):
-        text = "\033[94m"
+    def __repr__(self):
+        text = "TorchLossMeter:\n"
         for n, (w, l) in self.loss_dict.items():
-            text += "(%s: %.2f * %.4f = %.4f) " % (n, w, l, w * l)
-        text += " sum = %.4f" % self.get_sum()
-        return text + '\033[0m'
+            text += "   + %s: \t %.2f * %.4f = \t %.4f\n" % (n, w, l, w * l)
+        text += "sum = %.4f" % self.get_sum()
+        return text
+
+    def __getitem__(self, item):
+        w, l = self.loss_dict[item]
+        return w * l
 
 
 class AverageMeter:
@@ -315,30 +323,35 @@ class RunningAverageMeter:
         return {k: v for k, v in self.loss_dict.items()}
 
 
-class AnalysisEnv:
+class AutoPdb:
     """
     Print debug info if exceptions are triggered w/o handling.
     """
-    def __init__(self, *exceptions, enabled: bool = True):
-        self.exceptions = exceptions
+    def __init__(self, enabled: bool = True):
         self.enabled = enabled
-        if len(self.exceptions) == 0:
-            self.exceptions = [Exception, RuntimeError]
 
     def __enter__(self):
-        from pytorch_memlab.line_profiler.profile import global_line_profiler
-
-        if self.enabled:
-            global_line_profiler.enable()
+        pass
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        from pytorch_memlab.line_profiler.profile import global_line_profiler
-
-        if any([isinstance(exc_val, cls) for cls in self.exceptions]):
+        if exc_val is None:
+            return
+        if isinstance(exc_val, bdb.BdbQuit):
+            print("Post mortem is skipped because the exception is from Pdb.")
+        else:
             traceback.print_exc()
             pdb.post_mortem(exc_tb)
-            sys.exit(0)
-        global_line_profiler.disable()
+        # if isinstance(exc_val, MisconfigurationException):
+        #     if exc_val.__context__ is not None:
+        #         traceback.print_exc()
+        #         if program_args.accelerator is None:
+        #             pdb.post_mortem(exc_val.__context__.__traceback__)
+        # elif isinstance(exc_val, bdb.BdbQuit):
+        #     print("Post mortem is skipped because the exception is from Pdb.")
+        # else:
+        #     traceback.print_exc()
+        #     if program_args.accelerator is None:
+        #         pdb.post_mortem(exc_val.__traceback__)
 
 
 class Timer:
@@ -443,13 +456,18 @@ def natural_time(elapsed):
         return f"{elapsed * 1000:.3f}ms"
 
 
-def performance_counter(n_iter: int = 1):
+def performance_counter(n_iter: int = 1, run_ahead: int = 0, desc: str = None):
     """
     Usage:
     for _ in performance_counter(5):
         some_code()
     :param n_iter: number of iterations
+    :param run_ahead: iter to run before timing (used to warm-up)
     """
+    if desc is not None:
+        print(f" + {desc} ...")
+    for i_iter in range(run_ahead):
+        yield i_iter - run_ahead
     all_times = []
     for i_iter in range(n_iter):
         try:
@@ -483,6 +501,7 @@ class pt_profile_named(ContextDecorator):
     Pytorch Profiler utility usage:
      - Annotate function with `@pycg.exp.pt_profile` or label a block using 'with pycg.exp.pt_profile_named('NAME')'
      - Run with ENV variable 'PT_PROFILE' set. (if it is 1, then only cpu profile, 2 is cuda profile)
+     -  (Usually 1 will be enough even if you're on GPU because 1 will show all host cuda calls)
     """
 
     profiler = None
@@ -535,17 +554,33 @@ def pt_profile(func):
         return func
 
 
-def mem_profile(func):
+def mem_profile(func=None, every=-1, active_only=True):
     """
     Usage:
         - Add a `@pycg.exp.mem_profile' to the function you want to test
+        -   Optionally add parameters '@pycg.exp.mem_profile(every=1)'
         - Run the script with environment variable 'MEM_PROFILE=1' set.
         - When the program ends, it will print the profiling result.
     """
     if 'MEM_PROFILE' in os.environ.keys():
-        from pytorch_memlab import profile
-        return profile(func)
+        from pytorch_memlab import profile_every, profile
+        from pytorch_memlab.line_profiler.line_profiler import DEFAULT_COLUMNS
+        import functools
+
+        if active_only:
+            col = [DEFAULT_COLUMNS[0]]
+        else:
+            col = DEFAULT_COLUMNS
+        if func is None:
+            if every == -1:
+                return functools.partial(profile, columns=col)
+            else:
+                return profile_every(output_interval=every, columns=col)
+        else:
+            return profile(func, columns=col)
     else:
+        if func is None:
+            return lambda f: f
         return func
 
 
@@ -653,3 +688,38 @@ def get_gpu_status(server_name, get_process_info: bool = False, use_nvml: bool =
         all_devs[proc_gpu].processes.append(cur_proc)
 
     return all_devs
+
+
+def mkdir_confirm(path: Union[Path, str]):
+    if path.exists():
+        assert path.is_dir()
+        while True:
+            ans = input(f"Directory {path} exists. [r]emove / [k]eep / [e]xit ?")
+            ans = ans.lower()
+            if ans == 'r':
+                shutil.rmtree(path)
+                break
+            elif ans == 'k':
+                break
+            elif ans == 'e':
+                raise KeyboardInterrupt
+
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def lru_cache_class(*lru_args, **lru_kwargs):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapped_func(self, *args, **kwargs):
+            # We're storing the wrapped method inside the instance. If we had
+            # a strong reference to self the instance would never die.
+            self_weak = weakref.ref(self)
+
+            @functools.wraps(func)
+            @functools.lru_cache(*lru_args, **lru_kwargs)
+            def cached_method(*args, **kwargs):
+                return func(self_weak(), *args, **kwargs)
+            setattr(self, func.__name__, cached_method)
+            return cached_method(*args, **kwargs)
+        return wrapped_func
+    return decorator

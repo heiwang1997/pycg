@@ -413,3 +413,16 @@ class Isometry:
         iquat = Quaternion.slerp(source.q, target.q, alpha)
         it = source.t * (1 - alpha) + target.t * alpha
         return Isometry(q=iquat, t=it)
+
+    def validified(self):
+        q = self.q.normalised
+        if np.any(np.isnan(q.q)) or np.any(np.isinf(q.q)):
+            print("Warning: Isometry.validified get invalid q.")
+            q = Quaternion()
+
+        t = np.copy(self.t)
+        if np.any(np.isnan(t)) or np.any(np.isinf(t)):
+            print("Warning: Isometry.validified get invalid t.")
+            t = np.zeros((3, ))
+
+        return Isometry(q=q, t=t)

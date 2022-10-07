@@ -1,5 +1,5 @@
+import functools
 import shutil
-import cv2
 import json
 import os
 import tempfile
@@ -36,6 +36,9 @@ class VisualizerNewAPIClosures:
     @staticmethod
     def keyboard_closures(cur_window, cur_scene, cur_pose_change_callback, cur_hists, all_windows):
 
+        temp_cam_keys = [gui.KeyName.F1, gui.KeyName.F2, gui.KeyName.F3, gui.KeyName.F4, gui.KeyName.F5,
+                         gui.KeyName.F6, gui.KeyName.F7, gui.KeyName.F8, gui.KeyName.F9]
+
         def on_key(e):
             if e.type == gui.KeyEvent.DOWN:
                 if e.key == gui.KeyName.COMMA:
@@ -52,13 +55,15 @@ class VisualizerNewAPIClosures:
                         " + Shift + Wheel: high-precision fov.\n"
                         "Keyboard Shortcuts:\n"
                         " + e(X)it: raise a KeyboardInterrupt exception to end the program directly.\n"
-                        " + (S)etting: show settings side-bard.\n"
+                        " + (S)etting: show settings sidebar.\n"
                         " + (A)xes: show the axes.\n"
                         " + (H)istogram: show histograms if available.\n"
                         " + (R)ecord: record the current camera poses (and its animation if existing).\n"
                         " + (L)ight: record the sun light direction (but not saved to file).\n"
                         " + (O)bject: record the object pose (but not saved to file)."
                         " + (B)ackface: control whether to cull backface\n"
+                        " + anno(T)ation: save annotation to scene\n"
+                        " + F1-F12: Jump to temporary camera locations. Ctrl modifier to set.\n"
                         " + +/-: increase/decrease the size of point cloud.\n"
                         " + [/]: increase/decrease the fov.")
                 elif e.key == gui.KeyName.ONE:
@@ -145,6 +150,23 @@ class VisualizerNewAPIClosures:
                     pose, intr = VisualizerManager.get_window_camera_info(cur_window)
                     intr.fov_x -= np.deg2rad(5.0)
                     cur_window.setup_camera(intr.to_open3d_intrinsic(), pose.inv().matrix)
+                elif e.key == gui.KeyName.T:
+                    cur_scene.selection_sets = cur_window.get_selection_sets()
+                    print("Annotation selection set saved.")
+                elif e.key in temp_cam_keys:
+                    f_idx = temp_cam_keys.index(e.key) + 1
+                    cam_path = Path(f"/tmp/pycg-cam{f_idx}.bin")
+                    if cur_window.get_mouse_mods() == 2:    # Control pressed
+                        camera_pose, camera_intrinsic = VisualizerManager.get_window_camera_info(cur_window)
+                        print(f"Temp Camera {f_idx} saved!")
+                        with cam_path.open("wb") as f:
+                            pickle.dump([camera_pose, camera_intrinsic], f)
+                    else:
+                        if cam_path.exists():
+                            with cam_path.open("rb") as f:
+                                camera_pose, camera_intrinsic = pickle.load(f)
+                            print(f"Temp Camera {f_idx} loaded!")
+                            cur_window.setup_camera(camera_intrinsic.to_open3d_intrinsic(), camera_pose.inv().matrix)
             return 0
 
         return on_key
@@ -416,9 +438,29 @@ class VisualizerManager:
                     new_callback = self.pose_change_callbacks[scene_idx]
                     engine.register_key_callback(key=ord("R"), callback_func=new_callback)
 
-                # if add_ruler:
-                #     ruler_frame_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame()
-                #     engine.add_geometry(ruler_frame_mesh, reset_bounding_box=False)
+                # Temp camera locations (FX - Use, Ctrl+FX - Set)
+                def temp_camera_callback(vis, key_action, mod_action, idx):
+                    if key_action == 1:         # Press
+                        cam_path = Path(f"/tmp/pycg-cam{idx}.bin")
+                        if mod_action == 2:     # Control (Set)
+                            cam_param = vis.get_view_control().convert_to_pinhole_camera_parameters()
+                            camera_pose = Isometry.from_matrix(cam_param.extrinsic).inv()
+                            camera_intrinsic = CameraIntrinsic.from_open3d_intrinsic(cam_param.intrinsic)
+                            print(f"Temp Camera {idx} saved!")
+                            with cam_path.open("wb") as f:
+                                pickle.dump([camera_pose, camera_intrinsic], f)
+                        else:
+                            if cam_path.exists():
+                                with cam_path.open("rb") as f:
+                                    camera_pose, camera_intrinsic = pickle.load(f)
+                                print(f"Temp Camera {idx} loaded!")
+                                vis.get_view_control().convert_from_pinhole_camera_parameters(
+                                    camera_intrinsic.get_pinhole_camera_param(camera_pose, fix_bug=True)
+                                )
+                for fx in range(10):
+                    engine.register_key_action_callback(
+                        key=289 + fx, callback_func=functools.partial(temp_camera_callback, idx=fx))
+                        # key=ord("5") + fx, callback_func=functools.partial(temp_camera_callback, idx=fx))
 
                 if len(self.scenes) > 1:
                     # Sync camera and lighting settings.
@@ -539,6 +581,10 @@ class CameraIntrinsic:
     @property
     def fov_x(self):
         return 2 * np.arctan2(self.w, 2 * self.fx)
+
+    @property
+    def fov_y(self):
+        return 2 * np.arctan2(self.h, 2 * self.fy)
 
     @fov_x.setter
     def fov_x(self, value):
@@ -869,6 +915,9 @@ class Scene:
         self.lights = {}
         self.output = ["rgb"]
 
+        self.cached_pyrenderer = None
+        self.selection_sets = []
+
         # camera_pose = camera_base @ rel_camera_pose
         self.camera_base = Isometry()
         self.relative_camera_pose = Isometry()      # This only allows for quantized animation.
@@ -1027,8 +1076,8 @@ class Scene:
                 pos = look_at + distance * (np.cos(plane_angle / 180.0 * np.pi) * cplane_x +
                                             np.sin(plane_angle / 180.0 * np.pi) * cplane_y)
 
-        self.camera_base = Isometry(t=look_at)
-        self.camera_pose = Isometry.look_at(np.asarray(pos), np.asarray(look_at), up_axis)
+        self.camera_base = Isometry(t=look_at).validified()
+        self.camera_pose = Isometry.look_at(np.asarray(pos), np.asarray(look_at), up_axis).validified()
         self.camera_intrinsic = CameraIntrinsic.from_fov(w, h, np.deg2rad(fov))
         return self
 
@@ -1338,10 +1387,8 @@ class Scene:
                 # By default, blender will add '.png' to the input path if the suffix didn't exist.
                 render_tmp_file = Path(render_tmp_dir_p) / "rgb.png"
                 blender.send_render(quality=quality, save_path=str(render_tmp_file))
-                rgb_img = cv2.imread(str(render_tmp_file), cv2.IMREAD_UNCHANGED)
+                rgb_img = image.read(render_tmp_file)
 
-        if rgb_img.shape[2] == 3 or rgb_img.shape[2] == 4:
-            rgb_img[:, :, :3] = rgb_img[:, :, :3][:, :, ::-1]
         return rgb_img
 
     def render_blender_animation(self, do_render: bool = True, quality: int = 128):
@@ -1358,9 +1405,7 @@ class Scene:
                 # By default, blender will add '.png' to the input path if the suffix didn't exist.
                 render_tmp_file = Path(render_tmp_dir_p) / "rgb.png"
                 blender.send_render(quality=quality, save_path=str(render_tmp_file))
-                rgb_img = cv2.imread(str(render_tmp_file), cv2.IMREAD_UNCHANGED)
-                if rgb_img.shape[2] == 3 or rgb_img.shape[2] == 4:
-                    rgb_img[:, :, :3] = rgb_img[:, :, :3][:, :, ::-1]
+                rgb_img = image.read(render_tmp_file)
             yield t_cur, rgb_img
 
     def render_opengl(self, multisample: int = 1, need_alpha=False, save_path: str = None):
@@ -1444,6 +1489,43 @@ class Scene:
             img = renderer.render_to_image()
             yield t_cur, np.array(img)
 
+    def render_pyrender(self):
+        # pyrender seems to have a better support for EGL.
+        import os
+        os.environ['PYOPENGL_PLATFORM'] = 'egl'
+        import pyrender, trimesh
+
+        pr_scene = pyrender.Scene(
+            ambient_light=[self.ambient_color[-1]] * 3,
+            bg_color=self.ambient_color[:3]
+        )
+        for obj_uuid, obj_data in self.objects.items():
+            if isinstance(obj_data.geom, o3d.geometry.TriangleMesh):
+                obj_data.geom.compute_triangle_normals(normalized=True)
+                pr_scene.add(pyrender.Mesh.from_trimesh(
+                    trimesh.Trimesh(
+                        vertices=np.asarray(obj_data.geom.vertices),
+                        faces=np.asarray(obj_data.geom.triangles),
+                        face_colors=np.asarray(obj_data.geom.triangle_normals) * 0.5 + 0.5), smooth=False),
+                    name=obj_uuid, pose=obj_data.pose.matrix)
+
+        cam_pose = self.camera_pose @ Isometry.from_axis_angle('+X', 180.0)
+        pr_scene.add(
+            pyrender.IntrinsicsCamera(
+                self.camera_intrinsic.fx, self.camera_intrinsic.fy,
+                self.camera_intrinsic.cx, self.camera_intrinsic.cy,
+            ), pose=cam_pose.matrix
+        )
+
+        # Cache the renderer as context creation is slow.
+        if self.cached_pyrenderer is None or self.cached_pyrenderer.viewport_height != self.camera_intrinsic.h or \
+                self.cached_pyrenderer.viewport_width != self.camera_intrinsic.w:
+            self.cached_pyrenderer = pyrender.OffscreenRenderer(
+                self.camera_intrinsic.w, self.camera_intrinsic.h)
+
+        return self.cached_pyrenderer.render(
+            pr_scene, flags=pyrender.RenderFlags.FLAT)[0]
+
 
 class BaseTheme:
     def __init__(self, info):
@@ -1500,7 +1582,8 @@ class NaturalEnvMaps(BaseTheme):
     pass
 
 
-def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=None, viewport_shading='NORMAL'):
+def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=None,
+                    viewport_shading='NORMAL', backend='filament'):
     """
     Headless render a multiview image of geometry list, mainly used for training visualization.
     :param geoms: list of geometry, could be annotated.
@@ -1508,6 +1591,7 @@ def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=No
     :param height: height of each image
     :param up_axis: up axis of scene
     :param viewport_shading: shading used.
+    :param backend: opengl, filament, or pyrender
     :return: an image.
     """
     scene = Scene()
@@ -1518,7 +1602,14 @@ def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=No
     for view_angle in [0.0, 90.0, 180.0, 270.0]:
         scene.quick_camera(w=width, h=height, fov=45.0, up_axis=up_axis,
                            fill_percent=0.7, plane_angle=view_angle + 45.0)
-        my_pic = scene.render_filament(headless=True)
+        if backend == 'opengl':
+            my_pic = scene.render_opengl()
+        elif backend == 'filament':
+            my_pic = scene.render_filament(headless=True)
+        elif backend == 'pyrender':
+            my_pic = scene.render_pyrender()
+        else:
+            raise NotImplementedError
         multiview_pics.append(my_pic)
     return image.hlayout_images(multiview_pics)
 

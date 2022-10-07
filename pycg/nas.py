@@ -42,7 +42,6 @@ def is_network_mount(path):
 
     for partition_data in psutil.disk_partitions(all=True):
         # suppose one with colon is network mount.
-        # TODO: If nas stuck, try call `df .' explicitly
         if ":" in partition_data.device or "//" in partition_data.device:
             mount_point = partition_data.mountpoint
             if mount_point == path:

@@ -1,4 +1,5 @@
 import math
+import textwrap
 
 import numpy as np
 from PIL import Image
@@ -193,15 +194,34 @@ def hlayout_images(image_list: list, slot_widths: list = None, height: int = -1,
     return canvas
 
 
-def text(text, font='DejaVuSansMono.ttf', font_size=16):
+def text(text, font='DejaVuSansMono.ttf', font_size=16, max_width=None):
     from PIL import ImageFont, ImageDraw
 
     font_obj = ImageFont.truetype(font, font_size)
-    font_dim = font_obj.getsize(text)
 
-    img = Image.new('RGB', font_dim, color=(255, 255, 255))
+    # Get character width and determine text-warps
+    if max_width is not None:
+        c_width = font_obj.getsize('ABC')[0] // 3
+        max_characters = math.floor(max_width / c_width)
+        text = textwrap.wrap(text, width=max_characters)
+
+    if not isinstance(text, list):
+        text = text.split('\n')
+
+    # Determine real dimensions:
+    font_w, font_h = 0, 0
+    for line_text in text:
+        font_dim = font_obj.getsize(line_text)
+        font_h += font_dim[1]
+        font_w = max(font_w, font_dim[0])
+
+    img = Image.new('RGB', (font_w, font_h), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
-    draw.text((0, 0), text, font=font_obj, fill=(0, 0, 0))
+    line_h = 0
+    for line_text in text:
+        draw.text((0, line_h), line_text, font=font_obj, fill=(0, 0, 0))
+        line_h += font_obj.getsize(line_text)[1]
+
     img = np.asarray(img)
     return img
 
