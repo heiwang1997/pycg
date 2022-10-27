@@ -3,12 +3,12 @@ import shutil
 import json
 import os
 import tempfile
-import open3d as o3d
 import numpy as np
 from .animation import SceneAnimator
 from .isometry import Isometry
 import pycg.vis as vis
 import pycg.image as image
+import pycg.o3d as o3d
 import pycg.blender_client as blender
 from pathlib import Path
 from pyquaternion import Quaternion
@@ -277,10 +277,6 @@ class VisualizerNewAPIClosures:
 
 class VisualizerManager:
     TITLE_HEIGHT_FIX = 24
-    HISTOGRAM_COLORMAP = {
-        'viridis': gui.Color.Colormap.VIRIDIS, 'plasma': gui.Color.Colormap.PLASMA,
-        'jet': gui.Color.Colormap.JET, 'spectral': gui.Color.Colormap.SPECTRAL
-    }
 
     def __init__(self):
         self.scenes = []
@@ -358,7 +354,11 @@ class VisualizerManager:
                         h_min, h_max, h_values = self.convert_histogram(mesh_obj.annotations[0])
                         hist_widget = gui.Histogram(20, 50 + len(histogram_widgets) * 100, 400, 100,
                                                     f"PC-{mesh_name[:6]}")
-                        hist_widget.set_value(h_min, h_max, h_values, self.HISTOGRAM_COLORMAP[mesh_obj.annotations[1]])
+                        HISTOGRAM_COLORMAP = {
+                            'viridis': gui.Color.Colormap.VIRIDIS, 'plasma': gui.Color.Colormap.PLASMA,
+                            'jet': gui.Color.Colormap.JET, 'spectral': gui.Color.Colormap.SPECTRAL
+                        }
+                        hist_widget.set_value(h_min, h_max, h_values, HISTOGRAM_COLORMAP[mesh_obj.annotations[1]])
                         histogram_widgets.append(hist_widget)
                 other_widgets += histogram_widgets
 
@@ -480,7 +480,8 @@ class VisualizerManager:
                             # self.gl_render_options.save_to_json("/tmp/ro.json")
                             # engine.get_render_option().load_from_json("/tmp/ro.json")
 
-                    engine.register_view_refresh_callback(on_view_refresh)
+                    if o3d.is_custom_build:
+                        engine.register_view_refresh_callback(on_view_refresh)
                 all_engines.append(engine)
             self.all_engines = all_engines
 
@@ -911,7 +912,7 @@ class SceneLight:
 
 class Scene:
 
-    def __init__(self, cam_path: str = None):
+    def __init__(self, cam_path: str = None, up_axis: str = '+Y'):
         self.objects = {}
         self.lights = {}
         self.output = ["rgb"]
@@ -952,7 +953,7 @@ class Scene:
         self.background_updated = False     # Should change outside.
         self.point_size = 5.0
         self.viewport_shading = 'LIT'       # Supported: LIT, UNLIT, NORMAL
-        self.up_axis = '+Y'
+        self.up_axis = up_axis
         self.backface_culling = False
 
         # We no longer add default light: this is now controlled by themes.
@@ -977,7 +978,8 @@ class Scene:
         self.relative_camera_pose = self.camera_base.inv() @ value
 
     def set_filament_env_map(self, name: str):
-        default_path = Path(o3d.__path__[0]) / "resources"
+        import open3d
+        default_path = Path(open3d.__path__[0]) / "resources"
         if (default_path / f"{name}_ibl.ktx").exists():
             self._env_map_filament = str(default_path / name)
         else:
@@ -1310,7 +1312,7 @@ class Scene:
         scene.view.set_color_grading(o3dr.ColorGrading(o3dr.ColorGrading.Quality.ULTRA,
                                                        o3dr.ColorGrading.ToneMapping.LINEAR))
         # TODO: Fix Shadow Bug
-        # scene.view.set_shadowing(True, scene.view.ShadowType.VSM)
+        scene.view.set_shadowing(True, scene.view.ShadowType.VSM)
 
         sv.show_skybox(self.filament_show_skybox)
         scene.scene.set_indirect_light(self._env_map_filament)
@@ -1542,13 +1544,21 @@ class Scene:
         )
         for obj_uuid, obj_data in self.objects.items():
             if isinstance(obj_data.geom, o3d.geometry.TriangleMesh):
-                obj_data.geom.compute_triangle_normals(normalized=True)
-                pr_scene.add(pyrender.Mesh.from_trimesh(
-                    trimesh.Trimesh(
-                        vertices=np.asarray(obj_data.geom.vertices),
-                        faces=np.asarray(obj_data.geom.triangles),
-                        face_colors=np.asarray(obj_data.geom.triangle_normals) * 0.5 + 0.5), smooth=False),
-                    name=obj_uuid, pose=obj_data.pose.matrix)
+                if self.viewport_shading == 'NORMAL':
+                    obj_data.geom.compute_triangle_normals(normalized=True)
+                    pr_scene.add(pyrender.Mesh.from_trimesh(
+                        trimesh.Trimesh(
+                            vertices=np.asarray(obj_data.geom.vertices),
+                            faces=np.asarray(obj_data.geom.triangles),
+                            face_colors=np.asarray(obj_data.geom.triangle_normals) * 0.5 + 0.5), smooth=False),
+                        name=obj_uuid, pose=obj_data.pose.matrix)
+                else:
+                    pr_scene.add(pyrender.Mesh.from_trimesh(
+                        trimesh.Trimesh(
+                            vertices=np.asarray(obj_data.geom.vertices),
+                            faces=np.asarray(obj_data.geom.triangles),
+                            vertex_colors=np.asarray(obj_data.geom.vertex_colors))),
+                        name=obj_uuid, pose=obj_data.pose.matrix)
 
         cam_pose = self.camera_pose @ Isometry.from_axis_angle('+X', 180.0)
         pr_scene.add(
@@ -1564,8 +1574,11 @@ class Scene:
             self.cached_pyrenderer = pyrender.OffscreenRenderer(
                 self.camera_intrinsic.w, self.camera_intrinsic.h)
 
-        return self.cached_pyrenderer.render(
-            pr_scene, flags=pyrender.RenderFlags.FLAT)[0]
+        render_flag = pyrender.RenderFlags.FLAT
+        if not self.backface_culling:
+            render_flag |= pyrender.RenderFlags.SKIP_CULL_FACES
+
+        return self.cached_pyrenderer.render(pr_scene, flags=render_flag)[0]
 
 
 class BaseTheme:

@@ -9,6 +9,7 @@ import math
 
 from .isometry import Isometry
 from .color import map_quantized_color
+from .exp import logger
 from pyquaternion import Quaternion
 from pathlib import Path
 from typing import List, Dict, Tuple, Union, Iterable
@@ -216,13 +217,17 @@ def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout
 
         if len(default_camera_kwargs) == 0:
             # Get monitor width so that we can fit in.
-            from screeninfo import get_monitors
-            screen_width = get_monitors()[0].width
-            screen_height = get_monitors()[0].height - 128
-            window_width = min(screen_width // layout_cols, 1024)
-            window_height = min(screen_height // layout_rows, 768)
-            default_camera_kwargs['w'] = int(window_width / scale)
-            default_camera_kwargs['h'] = int(window_height / scale)
+            try:
+                from screeninfo import get_monitors
+                screen_width = get_monitors()[0].width
+                screen_height = get_monitors()[0].height - 128
+                window_width = min(screen_width // layout_cols, 1024)
+                window_height = min(screen_height // layout_rows, 768)
+                default_camera_kwargs['w'] = int(window_width / scale)
+                default_camera_kwargs['h'] = int(window_height / scale)
+            except:
+                logger.warning("failed to obtain screen info. Is screeninfo package installed?")
+                default_camera_kwargs = {'w': 1024, 'h': 768}
 
     else:
         identities_groups = [identities_groups]
@@ -706,7 +711,7 @@ def pointcloud(pc, cid: np.ndarray = None, color: np.ndarray = None, ucid: int =
         assert color.shape[0] == pc.shape[0], f"Point and color must have same size {color.shape[0]}, {pc.shape[0]}"
         if color.dtype == np.uint8:
             color = color.astype(float) / 255.
-        point_cloud.colors = o3d.utility.Vector3dVector(color)
+        point_cloud.colors = o3d.utility.Vector3dVector(color[:, :3])
 
     if normal is not None:
         normal = ensure_from_torch(normal)
@@ -793,6 +798,9 @@ def mesh(mesh_or_vertices: Union[np.ndarray, torch.Tensor, o3d.geometry.Triangle
     else:
         vertices = ensure_from_torch(mesh_or_vertices, 2)
         triangles = ensure_from_torch(triangles, 2)
+
+    if color is not None:
+        color = ensure_from_torch(color, 2)
 
     mesh = o3d.geometry.TriangleMesh()
     mesh.vertices = o3d.utility.Vector3dVector(vertices)
@@ -959,12 +967,12 @@ def wireframe_bbox(extent_min=None, extent_max=None, solid=False, tube=False, tu
         extent_max = np.array(extent_max)
 
     # Ensure (N, 3) numpy arrays
-    extent_min = ensure_from_torch(extent_min, 2)
-    extent_max = ensure_from_torch(extent_max, 2)
     if not isinstance(extent_max[0], Iterable):
         extent_max = extent_max[None, :]
     if not isinstance(extent_min[0], Iterable):
         extent_min = extent_min[None, :]
+    extent_min = ensure_from_torch(extent_min, 2)
+    extent_max = ensure_from_torch(extent_max, 2)
     assert extent_min.shape[0] == extent_max.shape[0]
 
     if cid is not None:
@@ -1275,7 +1283,7 @@ def colored_triangle_soup(mesh: o3d.geometry.TriangleMesh, color: np.ndarray):
     return soup
 
 
-def from_file(path: str or Path, compute_normal: bool = True):
+def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures: bool = False):
     if not isinstance(path, Path):
         path = Path(path)
     if not path.exists():
@@ -1292,8 +1300,72 @@ def from_file(path: str or Path, compute_normal: bool = True):
         else:
             data = np.genfromtxt(path)
         geom = pointcloud(data[:, :3], normal=data[:, 3:])
-    elif suffix in [".stl", ".obj", ".off", ".gltf"]:
+    elif suffix in [".stl", ".off", ".gltf"]:
+        # In the future: load PBR material in gltf to render in filament
         geom = o3d.io.read_triangle_mesh(str(path))
+    elif suffix == ".obj":
+        """
+        Open3D loader does not support materials and textures very well, with the following limitations:
+            1. kd is not loaded.
+            2. texture (kd_map) can be loaded, but if some textures are empty, then it refuses to display
+        any texture: https://github.com/isl-org/Open3D/issues/4916
+        For now, we only regard kd and kd_map in MLT files, 
+            if load_obj_textures == True, we will then return a list of triangle meshes, each either with textures,
+        or with per-vertex colors.
+            else, we return a mesh with per-vertex colors, the one with textures will be the average color of the
+        texture image.
+        """
+        import trimesh
+        obj_components = trimesh.load(path)
+
+        if isinstance(obj_components, trimesh.Trimesh):
+            geom = obj_components.as_open3d
+        else:
+            o3d_components = []
+            tex_coord_warning = False
+            for comp_name, comp_trimesh in obj_components.geometry.items():
+                o3d_mesh = o3d.geometry.TriangleMesh()
+                o3d_mesh.vertices = o3d.utility.Vector3dVector(np.asarray(comp_trimesh.vertices))
+                o3d_mesh.triangles = o3d.utility.Vector3iVector(np.asarray(comp_trimesh.faces))
+
+                assert comp_trimesh.visual.kind == 'texture'
+                if comp_trimesh.visual.uv is not None:
+                    tri_uv = comp_trimesh.visual.uv[comp_trimesh.faces.ravel()]
+                    if not np.all(tri_uv >= 0.0) or not np.all(tri_uv <= 1.0):
+                        if not tex_coord_warning:
+                            logger.warning(f"Texture coordinates tiling exceed 0-1!")
+                            tex_coord_warning = True
+                    tri_uv = tri_uv % 1.0
+                    o3d_mesh.triangle_uvs = o3d.utility.Vector2dVector(tri_uv)
+
+                tex_img = comp_trimesh.visual.material.image
+                kd_multiplier = None
+                if tex_img is not None:
+                    tex_img = np.asarray(tex_img)
+                    if load_obj_textures:
+                        o3d_mesh.textures = [o3d.geometry.Image(tex_img)]
+                        o3d_mesh.triangle_material_ids = o3d.utility.IntVector(
+                            np.zeros((len(o3d_mesh.triangles, )), dtype=np.int32))
+                    else:
+                        kd_multiplier = np.mean(tex_img.reshape(-1, tex_img.shape[-1]).astype(float) / 255., axis=0)[:3]
+                        logger.warning(f"Detected texture of size {tex_img.shape}, using mean color {kd_multiplier}")
+                        if len(kd_multiplier) < 3:
+                            # Get rid of some strange 2-channel textures.
+                            kd_multiplier = None
+
+                # Always set v-color
+                kd_color = comp_trimesh.visual.material.diffuse[:3].astype(float)[None, :] / 255.
+                if kd_multiplier is not None:
+                    kd_color = kd_color * kd_multiplier[None, :]
+                o3d_mesh.vertex_colors = o3d.utility.Vector3dVector(np.repeat(kd_color, len(o3d_mesh.vertices), axis=0))
+
+                o3d_components.append(o3d_mesh)
+
+            if load_obj_textures:
+                geom = o3d_components
+            else:
+                geom = merged_entities(o3d_components)[0]
+
     elif suffix == ".ply":
         from plyfile import PlyData, PlyElement
         # Determine filetype by peaking into ply header
@@ -1327,6 +1399,11 @@ def from_file(path: str or Path, compute_normal: bool = True):
     if isinstance(geom, o3d.geometry.TriangleMesh):
         if compute_normal: # and not geom.has_vertex_normals():
             geom.compute_vertex_normals()
+    elif isinstance(geom, list):
+        if isinstance(geom[0], o3d.geometry.TriangleMesh):
+            if compute_normal:
+                for g in geom:
+                    g.compute_vertex_normals()
 
     return geom
 

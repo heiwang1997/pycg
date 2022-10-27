@@ -5,6 +5,8 @@ import re
 from collections import OrderedDict, defaultdict
 import numpy as np
 import argparse
+
+import torch
 import yaml
 import json
 import pdb
@@ -19,6 +21,7 @@ from contextlib import ContextDecorator
 import weakref
 import functools
 import inspect
+import logging
 
 # if 'MEM_PROFILE' in os.environ.keys():
 #     from pytorch_memlab.line_profiler.profile import global_line_profiler
@@ -29,6 +32,19 @@ import inspect
 enable_pt_profile = 'PT_PROFILE' in os.environ.keys()
 if enable_pt_profile and 'CUDA_LAUNCH_BLOCKING' not in os.environ.keys():
     print(" -- Warning: PT_PROFILE set but CUDA_LAUNCH_BLOCKING is not set! --")
+
+
+class ConsoleColor:
+    PURPLE = '\033[95m'
+    CYAN = '\033[96m'
+    DARKCYAN = '\033[36m'
+    BLUE = '\033[94m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    RESET = '\033[0m'
 
 
 def parse_config_json(json_path: Path, args: argparse.Namespace = None):
@@ -68,22 +84,31 @@ def parse_config_json(json_path: Path, args: argparse.Namespace = None):
 
 
 def parse_config_yaml(yaml_path: Path, args: Union[argparse.Namespace, OmegaConf] = None,
-                      override: bool = True) -> OmegaConf:
+                      override: bool = True, additional_includes: list = None) -> OmegaConf:
     if args is None:
         args = OmegaConf.create()
     if isinstance(args, argparse.Namespace):
         args = OmegaConf.create(args.__dict__)
 
     configs = OmegaConf.load(yaml_path)
-    if "include_configs" in configs:
-        base_configs = configs["include_configs"]
-        del configs["include_configs"]
-        if isinstance(base_configs, str):
-            base_configs = [base_configs]
+    has_include = "include_configs" in configs
+
+    if has_include or additional_includes is not None:
+        base_config_paths = []
+
+        if has_include:
+            ic_configs = configs["include_configs"]
+            del configs["include_configs"]
+            if isinstance(ic_configs, str):
+                ic_configs = [ic_configs]
+            base_config_paths += [yaml_path.parent / Path(t) for t in ic_configs]
+
+        if additional_includes is not None:
+            base_config_paths += [Path(t) for t in additional_includes]
+
         # Update the config from top to down.
         base_cfg = OmegaConf.create()
-        for base_config in base_configs:
-            base_config_path = yaml_path.parent / Path(base_config)
+        for base_config_path in base_config_paths:
             base_cfg = parse_config_yaml(base_config_path, base_cfg)
         configs = OmegaConf.merge(base_cfg, configs)
 
@@ -112,7 +137,10 @@ def dict_to_args(data, recursive: bool = False):
     return args
 
 
-class ArgumentParserX(argparse.ArgumentParser):
+ArgumentParser = argparse.ArgumentParser
+
+
+class ArgumentParserX(ArgumentParser):
     def __init__(self, base_config_path=None, add_hyper_arg=True, to_oconf=True, **kwargs):
         super().__init__(**kwargs)
         self.add_hyper_arg = add_hyper_arg
@@ -121,6 +149,7 @@ class ArgumentParserX(argparse.ArgumentParser):
         if self.add_hyper_arg:
             self.add_argument('hyper', type=str, help='Path to the yaml parameter')
         self.add_argument('--exec', type=str, nargs='+', help='Extract code to modify the args')
+        self.add_argument('--include', type=str, nargs='+', help='Additional configs to include, will be appended to the include_configs key')
 
     @staticmethod
     def str2bool(v):
@@ -146,7 +175,7 @@ class ArgumentParserX(argparse.ArgumentParser):
             if _args.hyper.endswith("json"):
                 file_args = parse_config_json(Path(_args.hyper), file_args)
             else:
-                file_args = parse_config_yaml(Path(_args.hyper), file_args)
+                file_args = parse_config_yaml(Path(_args.hyper), file_args, additional_includes=_args.include)
         for ckey, cvalue in file_args.items():
             try:
                 if isinstance(cvalue, bool):
@@ -171,7 +200,7 @@ class ArgumentParserX(argparse.ArgumentParser):
                 except Exception as e:
                     lhs, rhs = exec_cmd.split('=')
                     exec_cmd = lhs + "='" + rhs + "'"
-                    print("CMD boosted:", exec_cmd)
+                    logger.warning(f"CMD boosted: {exec_cmd}")
                     exec(exec_cmd)
         return _args
 
@@ -295,14 +324,14 @@ class AverageMeter:
         else:
             color_device = sys.stdout
         if color == "y":
-            color_device.write('\033[93m')
+            color_device.write(ConsoleColor.YELLOW)
         elif color == "g":
-            color_device.write('\033[92m')
+            color_device.write(ConsoleColor.GREEN)
         elif color == "b":
-            color_device.write('\033[94m')
+            color_device.write(ConsoleColor.BLUE)
         print(self.get_printable_mean(), flush=True)
         if color is not None:
-            color_device.write('\033[0m')
+            color_device.write(ConsoleColor.RESET)
 
 
 class RunningAverageMeter:
@@ -365,16 +394,13 @@ class AutoPdb:
 
 class Timer:
     
-    def __init__(self, enabled: bool = True, cuda_sync: bool = False, color: str = "yellow"):
+    def __init__(self, enabled: bool = True, cuda_sync: bool = False, color: str = ConsoleColor.YELLOW):
         self.enabled = enabled
         self.cuda_sync = cuda_sync
         self.time_names = ["Timer Created"]
         self.time_points = [time.perf_counter()]
         self.report_up_to_date = False
-        self.console_color = {
-            "yellow": '\033[93m',
-            "blue": '\033[94m'
-        }[color]
+        self.console_color = color
         self.forbid_report_on_exit = False
 
     def toc(self, name):
@@ -406,7 +432,7 @@ class Timer:
                 for tname, tarr in merged_times.items():
                     print(f"{tname}: {np.mean(tarr)} +/- {np.std(tarr)}s")
             print("=============================")
-            sys.stdout.write('\033[0m')
+            sys.stdout.write(ConsoleColor.RESET)
         self.report_up_to_date = True
         if merged:
             self.forbid_report_on_exit = True
@@ -654,12 +680,14 @@ def mem_profile_class():
     return transform_cls
 
 
-def memory_usage(tensor):
-    import torch
+def memory_usage(tensor: torch.Tensor = None):
     if isinstance(tensor, torch.Tensor):
         size_mb = tensor.element_size() * tensor.nelement() / 1024 / 1024
         size_storage = sys.getsizeof(tensor.storage()) / 1024 / 1024
         return f"Torch tensor {list(tensor.size())}, logical {size_mb:.2f}MB, actual {size_storage:.2f}MB."
+    elif tensor is None:
+        from pytorch_memlab.line_profiler.line_records import readable_size
+        return f"[Active {readable_size(torch.cuda.memory_allocated())}]"
     else:
         return "Memory usage not supported."
 
@@ -794,3 +822,31 @@ def lru_cache_class(*lru_args, **lru_kwargs):
             return cached_method(*args, **kwargs)
         return wrapped_func
     return decorator
+
+
+class CustomFormatter(logging.Formatter):
+
+    HEADER = f"{ConsoleColor.CYAN}%(asctime)s (%(filename)s:%(lineno)d){ConsoleColor.RESET} "
+    CONTENT = "[%(levelname)s] %(message)s "
+
+    FORMATS = {
+        logging.DEBUG: HEADER + ConsoleColor.RESET + CONTENT + ConsoleColor.RESET,
+        logging.INFO: HEADER + ConsoleColor.RESET + CONTENT + ConsoleColor.RESET,
+        logging.WARNING: HEADER + ConsoleColor.YELLOW + CONTENT + ConsoleColor.RESET,
+        logging.ERROR: HEADER + ConsoleColor.RED + CONTENT + ConsoleColor.RESET,
+        logging.CRITICAL: HEADER + ConsoleColor.BOLD + ConsoleColor.RED + CONTENT + ConsoleColor.RESET
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt, "%m-%d %H:%M:%S")
+        return formatter.format(record)
+
+
+# Global variable for application-wise logging.
+logger = logging.getLogger("pycg.exp")
+logger.setLevel(logging.DEBUG)
+__ch = logging.StreamHandler()
+__ch.setLevel(logging.DEBUG)
+__ch.setFormatter(CustomFormatter())
+logger.addHandler(__ch)

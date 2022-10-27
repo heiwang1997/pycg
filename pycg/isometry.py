@@ -165,14 +165,15 @@ def project_orthogonal(rot):
 class Isometry:
     GL_POST_MULT = Quaternion(degrees=180.0, axis=[1.0, 0.0, 0.0])
 
-    def __init__(self, q=None, t=None):
+    def __init__(self, q=None, t=None, s=1.0):
         if q is None:
             q = Quaternion()
         if t is None:
             t = np.zeros(3)
         if not isinstance(t, np.ndarray):
             t = np.asarray(t)
-        assert t.shape[0] == 3 and t.ndim == 1
+        t = t.ravel()
+        assert t.shape[0] == 3
         self.q = q
         self.t = t
 
@@ -193,13 +194,14 @@ class Isometry:
     def from_matrix(mat, t_component=None, ortho=False):
         assert isinstance(mat, np.ndarray)
         if t_component is None:
-            assert mat.shape == (4, 4)
+            assert mat.shape == (4, 4) or mat.shape == (3, 4)
             if ortho:
                 mat[:3, :3] = project_orthogonal(mat[:3, :3])
-            return Isometry(q=Quaternion(matrix=mat), t=mat[:3, 3])
+            return Isometry(q=Quaternion(matrix=mat[:3, :3]), t=mat[:3, 3])
         else:
             assert mat.shape == (3, 3)
             assert t_component.shape == (3,)
+            mat = mat.astype(float)
             if ortho:
                 mat = project_orthogonal(mat)
             return Isometry(q=Quaternion(matrix=mat), t=t_component)
@@ -305,10 +307,6 @@ class Isometry:
         qinv = self.q.inverse
         return Isometry(q=qinv, t=-(qinv.rotate(self.t)))
 
-    def dot(self, right):
-        # dot operation as left multiplier.
-        return Isometry(q=(self.q * right.q), t=(self.q.rotate(right.t) + self.t))
-
     def to_gl_camera(self):
         return Isometry(q=(self.q * self.GL_POST_MULT), t=self.t)
 
@@ -395,18 +393,24 @@ class Isometry:
     def __matmul__(self, other):
         # "@" operator: other can be (N,3) or (3,).
         if hasattr(other, "device"):        # Torch tensor
-            assert other.ndim == 2 and other.size(1) == 3  # (N,3)
             th_R, th_t = self.torch_matrices(other.device)
-            return other @ th_R.t() + th_t.unsqueeze(0)
+            if other.ndim == 2 and other.size(1) == 3:  # (N,3)
+                return other @ th_R.t() + th_t.unsqueeze(0)
+            elif other.ndim == 1 and other.size(0) == 3: # (3,)
+                return th_R @ other + th_t
+            else:
+                raise NotImplementedError
         if hasattr(other, "transform"):
             # Open3d stuff...
+            other = copy.deepcopy(other)
             return other.transform(self.matrix)
-        if isinstance(other, Isometry):
+        if isinstance(other, Isometry) or isinstance(other, ScaledIsometry):
             return self.dot(other)
         if type(other) != np.ndarray or other.ndim == 1:
             return self.q.rotate(other) + self.t
         else:
-            return other @ self.q.rotation_matrix.T + self.t[np.newaxis, :]
+            # Numpy arrays
+            return (other @ self.q.rotation_matrix.T + self.t[np.newaxis, :]).astype(other.dtype)
 
     @staticmethod
     def interpolate(source, target, alpha):
@@ -426,3 +430,76 @@ class Isometry:
             t = np.zeros((3, ))
 
         return Isometry(q=q, t=t)
+
+
+class ScaledIsometry:
+    """
+    s (Rx + t), applied outside
+    """
+    def __init__(self, s=1.0, iso: Isometry = None):
+        if iso is None:
+            iso = Isometry()
+        self.iso = iso
+        self.s = s
+
+    @property
+    def t(self):
+        return self.iso.t
+
+    @property
+    def q(self):
+        return self.iso.q
+
+    def __repr__(self):
+        return f"ScaledIsometry: t = {self.t}, q = {self.q}, s = {self.s}"
+
+    @property
+    def matrix(self):
+        mat = self.iso.matrix
+        mat[:3] *= self.s
+        return mat
+
+    def inv(self):
+        qinv = self.q.inverse
+        return ScaledIsometry(s=1.0 / self.s, iso=Isometry(q=qinv, t=-(qinv.rotate(self.t) * self.s)))
+
+    def __matmul__(self, other):
+        if isinstance(other, Isometry) or isinstance(other, ScaledIsometry):
+            return self.dot(other)
+        elif hasattr(other, "transform"):
+            other = copy.deepcopy(other)
+            other.transform(self.iso.matrix)
+            other.scale(self.s, center=np.zeros(3))
+            return other
+        else:
+            res = self.iso @ other
+            return self.s * res
+
+
+def _isometry_dot(left, right):
+    if isinstance(left, Isometry):
+        left_iso, left_scale = left, 1.0
+    elif isinstance(left, ScaledIsometry):
+        left_iso, left_scale = left.iso, left.s
+    else:
+        raise NotImplementedError
+
+    if isinstance(right, Isometry):
+        right_iso, right_scale = right, 1.0
+    elif isinstance(right, ScaledIsometry):
+        right_iso, right_scale = right.iso, right.s
+    else:
+        raise NotImplementedError
+
+    if left_scale == right_scale == 1.0:
+        return Isometry(q=(left_iso.q * right_iso.q), t=(left_iso.q.rotate(right_iso.t) + left_iso.t))
+    else:
+        return ScaledIsometry(
+            s=left_scale * right_scale,
+            iso=Isometry(q=left_iso.q * right_iso.q,
+                         t=(right_scale * left_iso.q.rotate(right_iso.t) + left_iso.t) / right_scale)
+        )
+
+
+Isometry.dot = _isometry_dot
+ScaledIsometry.dot = _isometry_dot
