@@ -850,3 +850,23 @@ __ch = logging.StreamHandler()
 __ch.setLevel(logging.DEBUG)
 __ch.setFormatter(CustomFormatter())
 logger.addHandler(__ch)
+
+
+class GlobalManager:
+    """
+    Manages global variables
+    """
+    def __init__(self):
+        self.variables = {}
+
+    def register_variable(self, name, init_value):
+        self.set(name, init_value)
+
+    def set(self, name, value):
+        self.variables[name] = value
+
+    def get(self, name):
+        return self.variables[name]
+
+
+global_var_manager = GlobalManager()

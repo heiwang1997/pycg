@@ -3,6 +3,7 @@ import copy
 import numpy as np
 import json
 import os
+from pycg.exp import logger
 from pyquaternion import Quaternion
 
 def so3_vee(Phi):
@@ -195,9 +196,14 @@ class Isometry:
         assert isinstance(mat, np.ndarray)
         if t_component is None:
             assert mat.shape == (4, 4) or mat.shape == (3, 4)
+            rot_mat = mat[:3, :3]
             if ortho:
-                mat[:3, :3] = project_orthogonal(mat[:3, :3])
-            return Isometry(q=Quaternion(matrix=mat[:3, :3]), t=mat[:3, 3])
+                rot_mat = project_orthogonal(rot_mat)
+            else:
+                rot_scale = np.diag(rot_mat.T @ rot_mat)
+                if not np.allclose(rot_scale, np.ones_like(rot_scale)):
+                    logger.warning(f"Rotation matrix has scale {rot_scale}, perhaps use ScaledIsometry?")
+            return Isometry(q=Quaternion(matrix=rot_mat), t=mat[:3, 3])
         else:
             assert mat.shape == (3, 3)
             assert t_component.shape == (3,)
@@ -452,6 +458,25 @@ class ScaledIsometry:
 
     def __repr__(self):
         return f"ScaledIsometry: t = {self.t}, q = {self.q}, s = {self.s}"
+
+    @property
+    def rotation(self):
+        return self.iso.rotation
+
+    @staticmethod
+    def from_matrix(mat, ortho=False):
+        assert isinstance(mat, np.ndarray)
+        assert mat.shape == (4, 4) or mat.shape == (3, 4)
+        mat = mat.astype(float)
+        rot_mat = mat[:3, :3]
+        scale_vec = np.sqrt(np.diag(rot_mat.T @ rot_mat))
+        scale_value = np.mean(scale_vec)
+        assert np.allclose(scale_vec, np.full_like(scale_vec, scale_value))
+        rot_mat /= scale_value
+        t_component = mat[:3, 3] / scale_value
+        if ortho:
+            rot_mat = project_orthogonal(rot_mat)
+        return ScaledIsometry(scale_value.item(), Isometry(q=Quaternion(matrix=rot_mat), t=t_component))
 
     @property
     def matrix(self):

@@ -4,6 +4,33 @@ import textwrap
 import numpy as np
 from PIL import Image
 from pathlib import Path
+from abc import ABC
+import scipy.stats
+
+
+class ImageOperation(ABC):
+    """ Lazy execution image operations """
+    def apply(self, img: np.ndarray):
+        pass
+
+
+class CropOperation(ImageOperation):
+    def __init__(self, x: int, y: int, w: int, h: int):
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+
+    def apply(self, img: np.ndarray):
+        return img[
+               max(0, self.y): min(self.y + self.h, img.shape[0] - 1),
+               max(0, self.x): min(self.x + self.w, img.shape[1] - 1)]
+
+    def enlarge(self, pix: int):
+        self.x -= pix
+        self.y -= pix
+        self.w += 2 * pix
+        self.h += 2 * pix
 
 
 def ensure_float_image(img: np.ndarray):
@@ -35,6 +62,51 @@ def alpha_compositing(image_a: np.ndarray, image_b: np.ndarray):
     alpha_final = alpha_a + alpha_comp
     color_final = (color_a * alpha_a + color_b * alpha_comp) / (alpha_final + 1e-8)
     return np.concatenate([color_final, alpha_final], axis=2)
+
+
+def gamma_transform(img: np.ndarray, gamma: float = 1.0, alpha_only: bool = False):
+    """
+    Apply gamma transform to an image x = x ** gamma.
+    :param img: source image
+    :param gamma: float, gamma value
+    :param alpha_only: if True only change the alpha channel, used to shrink / enlarge shadow
+    :return: numpy array
+    """
+    img = ensure_float_image(img)
+    if alpha_only:
+        assert img.ndim == 3 and img.shape[2] == 4, f"Cannot find alpha channel with size {img.shape}!"
+        img = np.concatenate([img[..., :3], img[..., 3:4] ** gamma], axis=2)
+    else:
+        img = img ** gamma
+    img = np.clip(img, a_min=0, a_max=1)
+    return img
+
+
+def auto_crop(img: np.ndarray, bound_color=None, tol: float = 2 / 255., enlarge: int = 0, return_op: bool = False):
+    img = ensure_float_image(img)
+    color_img = img[:, :, :3]
+
+    if bound_color is None:
+        # Auto determine boundary color
+        bound_samples = np.concatenate([
+            color_img[:2].reshape(-1, 3), color_img[-2:].reshape(-1, 3),
+            color_img[:, :2].reshape(-1, 3), color_img[:, -2:].reshape(-1, 3)
+        ], axis=0)
+        bound_color = scipy.stats.mode(bound_samples, axis=0).mode[0]
+    else:
+        if isinstance(bound_color[0], int) or isinstance(bound_color[0], np.uint8):
+            bound_color = [t / 255. for t in bound_color]
+        bound_color = np.asarray(bound_color)[:3]
+
+    dist_img = np.linalg.norm(color_img - bound_color[None, None, :], axis=-1)
+    dist_img = dist_img < tol
+    x_mask, y_mask = np.all(dist_img, axis=0), np.all(dist_img, axis=1)
+    x_mask, y_mask = np.where(~x_mask)[0], np.where(~y_mask)[0]
+    crop_op = CropOperation(x_mask[0], y_mask[0], x_mask[-1] - x_mask[0] + 1, y_mask[-1] - y_mask[0] + 1)
+    crop_op.enlarge(enlarge)
+    if return_op:
+        return crop_op
+    return crop_op.apply(img)
 
 
 def place_image(child_img: np.ndarray, parent_img: np.ndarray, pos_x: int, pos_y: int):
@@ -290,14 +362,19 @@ def read(path):
         return np.asarray(im)
 
 
-def write(img: np.ndarray, path):
+def write(img: np.ndarray, path_or_f):
     # Allow for swapped arguments.
-    if isinstance(path, np.ndarray):
-        img, path = path, img
+    if isinstance(path_or_f, np.ndarray):
+        img, path_or_f = path_or_f, img
 
     if img.dtype == float:
         img = (img * 255).astype(np.uint8)
-
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
     img = Image.fromarray(img)
-    img.save(path)
+
+    if isinstance(path_or_f, Path) or isinstance(path_or_f, str):
+        Path(path_or_f).parent.mkdir(parents=True, exist_ok=True)
+        img.save(path_or_f)
+    elif callable(getattr(path_or_f, "seek")):
+        img.save(path_or_f, format="png")
+    else:
+        raise NotImplementedError

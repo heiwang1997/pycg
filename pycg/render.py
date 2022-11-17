@@ -477,6 +477,8 @@ class VisualizerManager:
                                 camera_intrinsic.get_pinhole_camera_param(camera_pose, fix_bug=True)
                             )
                             eng.get_render_option().point_size = vis.get_render_option().point_size
+                            eng.get_render_option().mesh_show_back_face = vis.get_render_option().mesh_show_back_face
+                            eng.get_render_option().mesh_show_wireframe = vis.get_render_option().mesh_show_wireframe
                             # self.gl_render_options.save_to_json("/tmp/ro.json")
                             # engine.get_render_option().load_from_json("/tmp/ro.json")
 
@@ -1122,8 +1124,12 @@ class Scene:
         self.objects[new_name] = new_obj
         return self if not return_name else new_name
 
-    def remove_object(self, name):
-        del self.objects[name]
+    def remove_object(self, name, non_exist_ok: bool = False):
+        try:
+            del self.objects[name]
+        except KeyError:
+            if not non_exist_ok:
+                raise
         return self
 
     def set_object_attribute(self, name, kwargs: dict):
@@ -1311,7 +1317,6 @@ class Scene:
         import open3d.visualization.rendering as o3dr
         scene.view.set_color_grading(o3dr.ColorGrading(o3dr.ColorGrading.Quality.ULTRA,
                                                        o3dr.ColorGrading.ToneMapping.LINEAR))
-        # TODO: Fix Shadow Bug
         scene.view.set_shadowing(True, scene.view.ShadowType.VSM)
 
         sv.show_skybox(self.filament_show_skybox)
@@ -1406,7 +1411,7 @@ class Scene:
         blender.send_camera(self.relative_camera_pose, self.camera_intrinsic)
         if self.env_map is not None:
             if self.env_map_rotation == 'auto':
-                rotation = [0.0, 0.0, 0.0] if self.up_axis != '+Y' else [-np.pi / 2., 0.0, 0.0]
+                rotation = [0.0, 0.0, 0.0] if self.up_axis != '+Y' else [np.pi / 2., 0.0, 0.0]
             else:
                 rotation = self.env_map_rotation
             blender.send_envmap(self.env_map, rotation=rotation)
@@ -1414,7 +1419,9 @@ class Scene:
             blender.send_eval(f"bg_node=bpy.data.worlds['World'].node_tree.nodes['Background'];"
                               f"bg_node.inputs[0].default_value=({self.ambient_color[0]},{self.ambient_color[1]},{self.ambient_color[2]},1);"
                               f"bg_node.inputs[1].default_value={self.ambient_color[3]}")
-            blender.send_eval(f"bpy.context.scene.render.film_transparent={self.film_transparent}")
+        blender.send_eval(f"bpy.context.scene.render.film_transparent={self.film_transparent}")
+        if self.additional_blender_commands:
+            blender.send_eval(self.additional_blender_commands)
 
     def render_blender(self, do_render: bool = True, save_path: str = None, quality: int = 128):
         self._setup_blender_static()
@@ -1669,6 +1676,8 @@ def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=No
 
 
 def render_depth_open3d(render_group_lists: list, camera_list: list, camera_intrinsic: CameraIntrinsic):
+    assert False, "Please use vis.RayDistanceQuery instead."
+
     n_group = len(render_group_lists)
 
     depth_maps = []

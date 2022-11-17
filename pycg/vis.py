@@ -1378,7 +1378,7 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
         # vz = np.asarray(ply_data['vertex'].data['z'])
         # vw = np.asarray(ply_data['vertex'].data['value'])
         element_keys = [t.name for t in header_data]
-        if 'face' in element_keys:
+        if 'face' in element_keys and header_data['face'].count > 0:
             geom = o3d.io.read_triangle_mesh(str(path))
         else:
             geom = o3d.io.read_point_cloud(str(path))
@@ -1419,6 +1419,20 @@ def to_file(geom, path: str or Path):
         o3d.io.write_triangle_mesh(str(path), geom)
     else:
         raise NotImplementedError(type(geom))
+
+
+class RayDistanceQuery:
+    def __init__(self, mesh: o3d.geometry.TriangleMesh):
+        mesh = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
+        self.scene = o3d.t.geometry.RaycastingScene()
+        mesh_id = self.scene.add_triangles(mesh)
+
+    def compute_occupancy(self, points):
+        """ For (N, 3) array output (N,) bool occupancy, 1 is inside, 0 is outside """
+        points = ensure_from_torch(points, 2)
+        points = o3d.core.Tensor.from_numpy(points.astype(np.float32))
+        occupancy = self.scene.compute_occupancy(points)
+        return occupancy.numpy() > 0.5
 
 
 # Matplotlib Stuff.
