@@ -1,4 +1,5 @@
 import functools
+import pdb
 import shutil
 import json
 import os
@@ -8,6 +9,7 @@ from .animation import SceneAnimator
 from .isometry import Isometry
 import pycg.vis as vis
 import pycg.image as image
+from pycg.exp import logger
 import pycg.o3d as o3d
 import pycg.blender_client as blender
 from pathlib import Path
@@ -455,7 +457,7 @@ class VisualizerManager:
                                     camera_pose, camera_intrinsic = pickle.load(f)
                                 print(f"Temp Camera {idx} loaded!")
                                 vis.get_view_control().convert_from_pinhole_camera_parameters(
-                                    camera_intrinsic.get_pinhole_camera_param(camera_pose, fix_bug=True)
+                                    camera_intrinsic.get_pinhole_camera_param(camera_pose, fix_bug=True), allow_arbitrary=True
                                 )
                 for fx in range(10):
                     engine.register_key_action_callback(
@@ -474,7 +476,7 @@ class VisualizerManager:
                                 continue
 
                             eng.get_view_control().convert_from_pinhole_camera_parameters(
-                                camera_intrinsic.get_pinhole_camera_param(camera_pose, fix_bug=True)
+                                camera_intrinsic.get_pinhole_camera_param(camera_pose, fix_bug=True), allow_arbitrary=True
                             )
                             eng.get_render_option().point_size = vis.get_render_option().point_size
                             eng.get_render_option().mesh_show_back_face = vis.get_render_option().mesh_show_back_face
@@ -567,6 +569,16 @@ def render_scene_batches(scene_list, n_cols: int):
 
 
 class CameraIntrinsic:
+    """
+    A notice on Perspective/Orthogonal Projection.
+        - In theory, orthogonal projection can also be represented by fx,fy,cx,cy, but multiple combinations of
+    camera pose and fx/fy can give the same projection.
+        - In old API, once Fov <= 5.0, it will be treated as Orthogonal projection.
+        - In new API, in GUI you cannot change to Orthogonal projection (with minimum fov = 5.0).
+        - Hence, in our implementation, we use the fov=5.0 perspective to mimic behaviour of ortho-projection.
+    No code in Python end should be changed, just remove the warning from C++ end suffices.
+    """
+
     def __init__(self, w, h, fx, fy, cx, cy):
         self.w = w
         self.h = h
@@ -1248,7 +1260,7 @@ class Scene:
             engine.add_geometry(geom)
             warpped_engine.displayed_geometries[mesh_name] = geom
         engine.get_view_control().convert_from_pinhole_camera_parameters(
-            self.camera_intrinsic.get_pinhole_camera_param(self.camera_pose, fix_bug=True)
+            self.camera_intrinsic.get_pinhole_camera_param(self.camera_pose, fix_bug=True), allow_arbitrary=True
         )
         self.gl_render_options.point_size = self.point_size
         self.gl_render_options.save_to_json("/tmp/ro.json")
@@ -1265,7 +1277,7 @@ class Scene:
         engine = gl_engine.engine
         if "relative_camera" in self.animator.events.keys() or "camera_base" in self.animator.events.keys():
             engine.get_view_control().convert_from_pinhole_camera_parameters(
-                self.camera_intrinsic.get_pinhole_camera_param(self.camera_pose, fix_bug=True)
+                self.camera_intrinsic.get_pinhole_camera_param(self.camera_pose, fix_bug=True), allow_arbitrary=True
             )
         for obj_uuid in self.animator.events.keys():
             if obj_uuid in gl_engine.displayed_geometries.keys():
@@ -1423,6 +1435,15 @@ class Scene:
         if self.additional_blender_commands:
             blender.send_eval(self.additional_blender_commands)
 
+    def setup_blender_and_detach(self, pause: bool = True):
+        self._setup_blender_static()
+        if self.animator.is_enabled():
+            self.animator.send_blender()
+        blender.send_detach()
+        if pause:
+            logger.info("Blender exported. The process is no longer controlled by pycg.")
+            pdb.set_trace()
+
     def render_blender(self, do_render: bool = True, save_path: str = None, quality: int = 128):
         self._setup_blender_static()
         if not do_render or 'PAUSE_BEFORE_RENDER' in os.environ.keys():
@@ -1510,7 +1531,7 @@ class Scene:
         engine.destroy_window()
         self.camera_intrinsic = saved_intrinsic
 
-    def render_filament(self, headless: bool = True):
+    def render_filament(self):
         # Cache DISPLAY environment (don't use)
         #   My guess: whenever you create filament (off-screen or on-screen), EGL's context will be cached using
         # the current DISPLAY variable. Hence if you first do off-screen, then do on-screen, error will happen.
@@ -1520,7 +1541,7 @@ class Scene:
         #     x11_environ = os.environ['DISPLAY']
         #     del os.environ['DISPLAY']
         renderer = o3d.visualization.rendering.OffscreenRenderer(
-            self.camera_intrinsic.w, self.camera_intrinsic.h, "", headless)
+            self.camera_intrinsic.w, self.camera_intrinsic.h, "")
         self._build_filament_engine(renderer)
         img = renderer.render_to_image()
         # if x11_environ is not None:

@@ -1,11 +1,13 @@
 import math
 import textwrap
+from typing import List, Union
 
 import numpy as np
 from PIL import Image
 from pathlib import Path
 from abc import ABC
 import scipy.stats
+from io import BytesIO
 
 
 class ImageOperation(ABC):
@@ -298,6 +300,104 @@ def text(text, font='DejaVuSansMono.ttf', font_size=16, max_width=None):
     return img
 
 
+def assembled_slides(pic_matrix: List[List[Union[Path, str, np.ndarray]]], direction: str = "vertical",
+                     x_block_cm: float = 4.0, x_gap_cm: float = 0.5,
+                     y_block_cm: float = 4.0, y_gap_cm: float = 0.5):
+    """
+    Do a slide with a picture matrix, apply '.save(xxx.pptx)' to the output of this method to save
+        Note For future: if you want to use a assembled group, please run it multiple times, and adjust positions.
+    :param pic_matrix: matrix of pictures, could either be numpy, or picture paths.
+    :param direction: either vertical or horizontal
+        Note that if horizontal, pic_matrix will be treated as transposed.
+    :param x_block_cm: width of each element
+        This will be treated as the maximum width if direction == 'horizontal'
+    :param x_gap_cm: gap of the elements in x direction
+    :param y_block_cm: height of each element
+        This will be treated as the maximum height if direction == 'vertical'
+    :param y_gap_cm: gap of the elements in y direction
+    :return: pptx.Presentation (requires python-pptx)
+    """
+    for pic_row in pic_matrix:
+        assert len(pic_matrix[0]) == len(pic_row)
+
+    from pptx import Presentation
+    from pptx.util import Cm
+
+    x_block, x_gap = Cm(x_block_cm), Cm(x_gap_cm)
+    y_block, y_gap = Cm(y_block_cm), Cm(y_gap_cm)
+
+    prs = Presentation()
+    blank_slide_layout = prs.slide_layouts[6]
+    slide = prs.slides.add_slide(blank_slide_layout)
+
+    def np_to_file(img: np.ndarray):
+        f_obj = BytesIO()
+        write(img, f_obj)
+        f_obj.seek(0)
+        return f_obj
+
+    def get_row_data(input_row):
+        out_data = []
+        for t in input_row:
+            if isinstance(t, str) or isinstance(t, Path):
+                out_data.append(read(t))
+            else:
+                out_data.append(t)
+        out_data = [ensure_float_image(t) for t in out_data]
+        return out_data
+
+    if direction == "vertical":
+        y_ptr = Cm(0)
+        for pic_row in pic_matrix:
+            row_data = get_row_data(pic_row)
+            row_w, row_h = row_data[0].shape[1], row_data[0].shape[0]
+            if row_h / row_w > y_block / x_block:
+                ppt_size = {'height': y_block}
+                x_incr = (x_block - (y_block / row_h * row_w)) / 2.
+                y_ptr_new = y_ptr + y_block
+            else:
+                ppt_size = {'width': x_block}
+                x_incr = 0
+                y_ptr_new = y_ptr + (x_block / row_w * row_h)
+
+            for row_idx, row_img in enumerate(row_data):
+                left = row_idx * (x_gap + x_block) + x_incr
+                _ = slide.shapes.add_picture(np_to_file(row_img), left, y_ptr, **ppt_size)
+
+            y_ptr = y_ptr_new + y_gap
+
+        prs.slide_width = (x_block + x_gap) * len(pic_matrix[0]) - x_gap
+        prs.slide_height = int(y_ptr - y_gap)
+
+    elif direction == "horizontal":
+        x_ptr = Cm(0)
+        for pic_row in pic_matrix:
+            row_data = get_row_data(pic_row)
+            row_w, row_h = row_data[0].shape[1], row_data[0].shape[0]
+            if row_w / row_h > x_block / y_block:
+                ppt_size = {'width': x_block}
+                y_incr = (y_block - (x_block / row_w * row_h)) / 2.
+                x_ptr_new = x_ptr + x_block
+            else:
+                ppt_size = {'height': y_block}
+                y_incr = 0
+                x_ptr_new = x_ptr + (y_block / row_h * row_w)
+
+            for row_idx, row_img in enumerate(row_data):
+                top = row_idx * (y_gap + y_block) + y_incr
+                _ = slide.shapes.add_picture(np_to_file(row_img), x_ptr, top, **ppt_size)
+
+            x_ptr = x_ptr_new + x_gap
+
+        prs.slide_width = int(x_ptr - x_gap)
+        prs.slide_height = (y_block + y_gap) * len(pic_matrix[0]) - y_gap
+
+    else:
+        raise NotImplementedError
+
+    return prs
+
+
 def from_mplot(fig, close: bool = False):
     from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
     import matplotlib.pyplot as plt
@@ -357,6 +457,7 @@ def read(path):
     path = Path(path)
     if path.suffix == ".hdr" or path.suffix == ".exr":
         import imageio
+        # https://imageio.readthedocs.io/en/v2.4.1/format_hdr-fi.html#hdr-fi
         return np.asarray(imageio.v2.imread(path))
     with Image.open(path) as im:
         return np.asarray(im)

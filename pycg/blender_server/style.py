@@ -47,10 +47,16 @@ def set_origin_material(uuidx):
         nodes.clear()
 
         input_uv_node = nodes.new(type='ShaderNodeUVMap')
+        links = mat.node_tree.links
 
         checker_attr = mesh_attributes.get("material.checker", {"on": False})
         normal_attr = mesh_attributes.get("material.normal", {"on": False})
-        if checker_attr["on"]:
+        uniform_color_attr = mesh_attributes.get("uniform_color", None)
+
+        if uniform_color_attr is not None:
+            input_color_node = nodes.new(type='ShaderNodeRGB')
+            input_color_node.outputs[0].default_value = uniform_color_attr
+        elif checker_attr["on"]:
             input_color_node = nodes.new(type='ShaderNodeTexChecker')
             mat.node_tree.links.new(input_uv_node.outputs[0], input_color_node.inputs[0])
             input_color_node.inputs[1].default_value = checker_attr.get("color_a", (0.8, 0.29, 0.14, 1.0))
@@ -74,6 +80,22 @@ def set_origin_material(uuidx):
             input_color_node = nodes.new(type='ShaderNodeAttribute')
             input_color_node.attribute_name = "Col"
 
+        # Adding AO on top of input_color_node to increase contrast
+        ao_attr = mesh_attributes.get("material.ao", {"on": False})
+        if ao_attr["on"]:
+            ao_node = nodes.new(type='ShaderNodeAmbientOcclusion')
+            ao_node.inputs[1].default_value = 10.0  # Distance
+            gamma_node = nodes.new(type='ShaderNodeGamma')
+            gamma_node.inputs[1].default_value = ao_attr.get("gamma", 0.0)
+            mix_rgb_node = nodes.new(type='ShaderNodeMixRGB')
+            mix_rgb_node.blend_type = 'MULTIPLY'
+            mix_rgb_node.inputs[0].default_value = ao_attr.get("strength", 0.5)
+            links.new(input_color_node.outputs[0], ao_node.inputs[0])
+            links.new(ao_node.outputs[0], mix_rgb_node.inputs[1])
+            links.new(ao_node.outputs[1], gamma_node.inputs[0])
+            links.new(gamma_node.outputs[0], mix_rgb_node.inputs[2])
+            input_color_node = mix_rgb_node
+
         main_shader_node = nodes.new(type='ShaderNodeBsdfPrincipled')
         output_node = nodes.new(type='ShaderNodeOutputMaterial')
         # Main material attribute
@@ -81,11 +103,7 @@ def set_origin_material(uuidx):
         main_shader_node.inputs[5].default_value = mesh_attributes.get("material.specular", 0.0)
         main_shader_node.inputs[7].default_value = mesh_attributes.get("material.roughness", 0.5)
         # Link nodes
-        links = mat.node_tree.links
-        if mesh_attributes.get("uniform_color", None) is not None:
-            main_shader_node.inputs[0].default_value = mesh_attributes["uniform_color"]
-        else:
-            links.new(input_color_node.outputs[0], main_shader_node.inputs[0])
+        links.new(input_color_node.outputs[0], main_shader_node.inputs[0])
         links.new(main_shader_node.outputs[0], output_node.inputs[0])
         target_obj.data.materials.append(mat)
         target_obj.active_material = mat
@@ -109,7 +127,8 @@ def set_origin_material(uuidx):
         target_obj.cycles_visibility.diffuse = False
 
     # Other Attributes.
-    target_obj.cycles.is_shadow_catcher = mesh_attributes.get("cycles.is_shadow_catcher", False)
+    # target_obj.cycles.is_shadow_catcher = mesh_attributes.get("cycles.is_shadow_catcher", False)
+    target_obj.is_shadow_catcher = mesh_attributes.get("cycles.is_shadow_catcher", False)
     if mesh_attributes.get("smooth_shading", False):
         for p in target_obj.data.polygons:
             p.use_smooth = True

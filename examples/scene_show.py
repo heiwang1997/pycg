@@ -10,6 +10,8 @@ if __name__ == '__main__':
     bunny_geom = vis.colored_mesh(bunny_geom, ucid=0)
 
     bunny_geom2 = copy.deepcopy(bunny_geom)
+    vis.show_3d([bunny_geom], [bunny_geom2], use_new_api=False)
+
     s1, s2 = vis.show_3d([bunny_geom], [bunny_geom], show=False)
     img = s1.render_filament()
     image.show(img)

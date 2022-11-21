@@ -253,6 +253,12 @@ def send_clear():
     assert res_dict['result'] == 'success'
 
 
+def send_detach():
+    global _blender_connection
+    _blender_connection.send({'cmd': 'detach'})
+    # _blender_connection = BlenderConnection()
+
+
 def poll_finished():
     res_dict = _blender_connection.receive(nowait=False)
     assert res_dict['result'] != 'failed'

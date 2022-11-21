@@ -65,11 +65,14 @@ def handle_cmds(msg):
             cur_scene.camera.rotation_quaternion = cam_ext[3:7]
         if 'intrinsic' in msg.keys():
             cam_intr = np.asarray(msg['intrinsic'])
-            cur_scene.render.resolution_x = cam_intr[0]
-            cur_scene.render.resolution_y = cam_intr[1]
+            cur_scene.render.resolution_x = int(cam_intr[0])
+            cur_scene.render.resolution_y = int(cam_intr[1])
             cur_scene.camera.data.shift_x = cam_intr[2]
             cur_scene.camera.data.shift_y = cam_intr[3]
             cur_scene.camera.data.angle = cam_intr[4]
+            cur_scene.camera.data.clip_start = 0.1
+            cur_scene.camera.data.clip_end = 1000.0
+
         return {'result': 'success'}
     elif msg['cmd'] == 'get_entity':
         logging.info(f"Command get_entity: get uuid {msg['uuid']}")
@@ -158,6 +161,41 @@ def handle_cmds(msg):
 
         return {'result': 'added'}
 
+    elif msg['cmd'] == 'envmap':
+        cur_world = bpy.context.scene.world
+        cur_world.use_nodes = True
+        nodes = cur_world.node_tree.nodes
+        links = cur_world.node_tree.links
+        if bpy.data.images.get("EnvTex") is not None:
+            bpy.data.images.remove(bpy.data.images.get("EnvTex"), do_unlink=True)
+        nodes.clear()
+
+        # Create new image containing the env texture
+        env_tex_node = nodes.new(type='ShaderNodeTexEnvironment')
+        env_tex_data = msg['data']
+        assert env_tex_data.ndim == 3 and env_tex_data.shape[2] == 3
+        env_tex_data = np.concatenate([env_tex_data, np.ones_like(env_tex_data[:, :, 1:2])], axis=2).astype(np.float64)
+        env_tex_data = env_tex_data[::-1, ...]
+        new_tex = bpy.data.images.new(name=f"EnvTex", width=env_tex_data.shape[1], height=env_tex_data.shape[0],
+                                      alpha=True, float_buffer=True)
+        new_tex.file_format = 'HDR'
+        new_tex.pixels = env_tex_data.ravel()
+        env_tex_node.image = new_tex
+
+        tex_coord_node = nodes.new(type='ShaderNodeTexCoord')
+
+        tex_mapping_node = nodes.new(type='ShaderNodeMapping')
+        tex_mapping_node.inputs[2].default_value = msg['rotation']
+
+        output_node = nodes.new(type='ShaderNodeOutputWorld')
+        links.new(tex_coord_node.outputs[0], tex_mapping_node.inputs[0])
+        links.new(tex_mapping_node.outputs[0], env_tex_node.inputs[0])
+        links.new(env_tex_node.outputs[0], output_node.inputs[0])
+
+        logging.info(f"Command envmap: added! {env_tex_data.shape}")
+
+        return {'result': 'success'}
+
     elif msg['cmd'] == 'render':
         bpy.context.scene.cycles.samples = msg['quality']
         bpy.context.scene.render.filepath = msg['path']
@@ -165,9 +203,14 @@ def handle_cmds(msg):
         return {
             'result': 'rendered'
         }
+
     elif msg['cmd'] == 'eval':
         exec(msg['script'])
         return {'result': 'success'}
+
+    elif msg['cmd'] == 'detach':
+        raise ConnectionRefusedError
+
     else:
         raise NotImplementedError
 
@@ -208,6 +251,11 @@ class ClientOperator(bpy.types.Operator):
             except KeyError as e:
                 logging.error(e)
                 res = {'result': 'failed'}
+            except ConnectionRefusedError as e:
+                self.conn_manager.shutdown()
+                context.window_manager.event_timer_remove(self._timer)
+                print("Client about to shut-down.")
+                return {'CANCELLED'}
             if res is not None:
                 self.res_queue.put(res)
 
@@ -220,7 +268,6 @@ class ClientOperator(bpy.types.Operator):
         context.window_manager.modal_handler_add(self)
 
         ClientOperator.global_res_queue = self.res_queue
-        print(ClientOperator.global_res_queue)
 
         wm = context.window_manager
         self._timer = wm.event_timer_add(0.1, window=context.window)
@@ -267,7 +314,13 @@ def init_env():
     # Renderer and Color specs
     D.scenes[0].render.engine = 'CYCLES'
     D.scenes[0].cycles.device = 'GPU'
-    bpy.context.preferences.addons["cycles"].preferences.compute_device_type = "CUDA"
+
+    # Blender 2.x may not support the full feature set
+    # bpy.context.preferences.addons["cycles"].preferences.compute_device_type = "CUDA"
+
+    # Blender 3 now supports RTX (using OptiX)
+    bpy.context.preferences.addons["cycles"].preferences.compute_device_type = "OPTIX"
+
     # Let blender refresh GPU devices
     bpy.context.preferences.addons["cycles"].preferences.get_devices()
     for d in bpy.context.preferences.addons["cycles"].preferences.devices:
