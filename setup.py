@@ -1,12 +1,18 @@
+import re
 from setuptools import find_packages, setup
-from pycg import __version__
+
+
+with open("pycg/__init__.py", "r") as fh:
+    pycg_version = re.findall(r'__version__ = \'(.*?)\'', fh.read())[0]
+
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
+
 setup(
     name='python-pycg',
-    version=__version__,
+    version=pycg_version,
     author='Jiahui Huang',
     author_email='huangjh.work@outlook.com',
     description='PyCG: Toolbox for CG-related visualizations and computations',

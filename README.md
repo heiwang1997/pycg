@@ -1,10 +1,17 @@
 # PyCG: Toolbox for CG-related visualizations and computations
 
+[![Publish to PyPI.org](https://github.com/heiwang1997/pycg/actions/workflows/publish.yml/badge.svg)](https://github.com/heiwang1997/pycg/actions/workflows/publish.yml)
+
 I'm writing the document of this. Please do not use it unless you are someone internal.
 
 ## Install
 
-Clone this repository and install it via:
+You could either do:
+```shell
+pip install -U python-pycg
+```
+
+Or clone this repository and install it if you want to use newest features:
 ```shell
 git clone --recursive https://github.com/heiwang1997/pycg
 python setup.py develop
