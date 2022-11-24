@@ -1,17 +1,10 @@
-# Welcome to MkDocs
+# Welcome to PyCG
 
-For full documentation visit [mkdocs.org](https://www.mkdocs.org).
+PyCG is there for people to accelerate their 3D visualizations and computations, aiming at implementing complicated functions with as few lines as possible.
+The toolbox is created from the perspective of researchers and would hopefully accelerate your daily pipeline.
 
-## Commands
+Here are what PyCG can do:
 
-* `mkdocs new [dir-name]` - Create a new project.
-* `mkdocs serve` - Start the live-reloading docs server.
-* `mkdocs build` - Build the documentation site.
-* `mkdocs -h` - Print help message and exit.
+- Whatever you want
 
-## Project layout
-
-    mkdocs.yml    # The configuration file.
-    docs/
-        index.md  # The documentation homepage.
-        ...       # Other markdown pages, images and other files.
+## Gallery

@@ -29,3 +29,9 @@ twine upload dist/*
     1. Fix the bug, bump the version, and re-create a release using the new version.
     2. Fix the bug and re-run the Github Action by hand.
     3. Build locally and upload to PyPI.
+
+# Documentation Guide
+
+We use [mkdocs](https://squidfunk.github.io/mkdocs-material) to manage the documentations.
+Use `mkdocs serve` or `mkdocs build` under the root directory will work.
+Additionally, you may use ReadTheDocs to host it by visiting the [Dashboard](https://readthedocs.org/dashboard/).

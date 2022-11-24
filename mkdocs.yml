@@ -1,3 +1,8 @@
 site_name: PyCG Documentation
 docs_dir: docs
-theme: readthedocs
+theme: 
+  name: material
+  palette:
+    primary: amber
+    scheme: default
+repo_url: https://github.com/heiwang1997/pycg
