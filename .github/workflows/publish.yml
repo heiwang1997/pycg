@@ -1,13 +1,19 @@
 name: Publish to PyPI.org
+
+# Trigger options
 on:
+  # Either when user create release
   release:
     types: [published]
+  # Or manually triggered by me
   workflow_dispatch:
     inputs:
       logLevel:
         description: 'Log level'
         required: true
         default: 'warning'
+
+# Jobs to do
 jobs:
   pypi:
     runs-on: ubuntu-latest
