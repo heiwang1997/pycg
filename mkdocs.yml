@@ -1,1 +1,3 @@
-site_name: My Docs
+site_name: PyCG Documentation
+docs_dir: docs
+theme: readthedocs

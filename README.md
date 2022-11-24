@@ -1,6 +1,7 @@
 # PyCG: Toolbox for CG-related visualizations and computations
 
 [![Publish to PyPI.org](https://github.com/heiwang1997/pycg/actions/workflows/publish.yml/badge.svg)](https://github.com/heiwang1997/pycg/actions/workflows/publish.yml)
+[![Documentation Status](https://readthedocs.org/projects/pycg/badge/?version=latest)](https://pycg.readthedocs.io/en/latest/?badge=latest)
 
 I'm writing the document of this. Please do not use it unless you are someone internal.
 
