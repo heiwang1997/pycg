@@ -12,6 +12,7 @@ import pycg.image as image
 from pycg.exp import logger
 import pycg.o3d as o3d
 import pycg.blender_client as blender
+from pycg import get_assets_path
 from pathlib import Path
 from pyquaternion import Quaternion
 import uuid
@@ -40,6 +41,7 @@ class VisualizerNewAPIClosures:
 
         temp_cam_keys = [gui.KeyName.F1, gui.KeyName.F2, gui.KeyName.F3, gui.KeyName.F4, gui.KeyName.F5,
                          gui.KeyName.F6, gui.KeyName.F7, gui.KeyName.F8, gui.KeyName.F9]
+        wireframe_on = False
 
         def on_key(e):
             if e.type == gui.KeyEvent.DOWN:
@@ -64,6 +66,7 @@ class VisualizerNewAPIClosures:
                         " + (L)ight: record the sun light direction (but not saved to file).\n"
                         " + (O)bject: record the object pose (but not saved to file)."
                         " + (B)ackface: control whether to cull backface\n"
+                        " + (W)ireframe: Turn on/off the wireframe mode\n"
                         " + anno(T)ation: save annotation to scene\n"
                         " + F1-F12: Jump to temporary camera locations. Ctrl modifier to set.\n"
                         " + +/-: increase/decrease the size of point cloud.\n"
@@ -89,6 +92,10 @@ class VisualizerNewAPIClosures:
                 elif e.key == gui.KeyName.H:
                     for hst in cur_hists:
                         hst.visible = not hst.visible
+                elif e.key == gui.KeyName.W:
+                    nonlocal wireframe_on
+                    wireframe_on = not wireframe_on
+                    cur_window.enable_wireframe_mode(wireframe_on)
                 elif e.key == gui.KeyName.R:
                     if cur_pose_change_callback is not None:
                         # When output current pose, need to change back this.
@@ -838,6 +845,11 @@ class SceneObject:
 
 
 class SceneLight:
+    """
+    About Light Direction:
+        - SUN & SPOT: shoot direction is -Z in local coordinates!
+    """
+
     # We just use this sun to view shape for now (x100).
     PREVIEW_LIGHT_COLOR = [1., 1., 1.]
     FILAMENT_INTENSITY_MULT = 20000
@@ -992,10 +1004,10 @@ class Scene:
         self.relative_camera_pose = self.camera_base.inv() @ value
 
     def set_filament_env_map(self, name: str):
-        import open3d
-        default_path = Path(open3d.__path__[0]) / "resources"
-        if (default_path / f"{name}_ibl.ktx").exists():
-            self._env_map_filament = str(default_path / name)
+        if (o3d.get_resource_path() / f"{name}_ibl.ktx").exists():
+            self._env_map_filament = str(o3d.get_resource_path() / name)
+        elif (get_assets_path() / "envmaps" / f"{name}_ibl.ktx").exists():
+            self._env_map_filament = str(get_assets_path() / "envmaps" / name)
         else:
             raise FileNotFoundError
 
@@ -1080,7 +1092,7 @@ class Scene:
             }, scene_f)
 
     def quick_camera(self, pos=None, look_at=None, w=1024, h=768, fov=60.0, up_axis=None,
-                     fill_percent=0.5, plane_angle=0.0, no_override=False):
+                     fill_percent=0.5, plane_angle=45.0, pitch_angle=20.0, no_override=False):
         if self.cam_path is not None and self.cam_path.exists() and no_override:
             return self
 
@@ -1103,7 +1115,7 @@ class Scene:
             cplane_y = cplane_y / np.linalg.norm(cplane_y)
 
             if len(self.objects) == 0:
-                print("Warning. Please add objects before using quick-camera!")
+                logger.warning("Please add objects before using quick-camera!")
                 pos = np.array([1.0, 0.0, 0.0])
                 look_at = np.array([0.0, 0.0, 0.0])
             else:
@@ -1113,8 +1125,11 @@ class Scene:
                 view_ratio = np.max(max_extent - min_extent) / fill_percent / 2
                 distance = view_ratio / np.tan(fov * 0.5 / 180.0 * np.pi)
                 look_at = (min_extent + max_extent) / 2.
-                pos = look_at + distance * (np.cos(plane_angle / 180.0 * np.pi) * cplane_x +
-                                            np.sin(plane_angle / 180.0 * np.pi) * cplane_y)
+                plane_deg = plane_angle / 180.0 * np.pi
+                pitch_deg = pitch_angle / 180.0 * np.pi
+                pos = look_at + distance * (np.cos(plane_deg) * np.cos(pitch_deg) * cplane_x +
+                                            np.sin(plane_deg) * np.cos(pitch_deg) * cplane_y +
+                                            np.sin(pitch_deg) * up_axis)
 
         self.camera_base = Isometry(t=look_at).validified()
         self.camera_pose = Isometry.look_at(np.asarray(pos), np.asarray(look_at), up_axis).validified()
@@ -1162,28 +1177,32 @@ class Scene:
         self.lights[new_name] = new_light
         return self
 
-    def remove_light(self, name):
-        del self.lights[name]
+    def remove_light(self, name, non_exist_ok: bool = False):
+        try:
+            del self.lights[name]
+        except KeyError:
+            if not non_exist_ok:
+                raise
         return self
 
-    def add_light_sun(self, name=None, light_dir=None, light_energy=5.0, angle=0.1745):
-        if light_dir is None:
-            if self.up_axis == '+Z':
-                light_dir = (1.0, 0.0, 0.0, 0.0)
-            elif self.up_axis == '-Z':
-                light_dir = (0.0, 1.0, 0.0, 0.0)
-            elif self.up_axis == '+Y':
-                light_dir = (0.707, -0.707, 0.0, 0.0)
-            elif self.up_axis == '-Y':
-                light_dir = (0.707, 0.707, 0.0, 0.0)
-            elif self.up_axis == '+X':
-                light_dir = (0.707, 0.0, 0.707, 0.0)
-            elif self.up_axis == '-X':
-                light_dir = (0.707, 0.0, -0.707, 0.0)
-            else:
-                raise NotImplementedError
-        return self.add_light('SUN', name, Isometry(t=(0.0, 0.0, 0.0), q=Quaternion(light_dir)),
-                              {'energy': light_energy, 'angle': angle})
+    def add_light_sun(self, name=None, light_look_at=None, light_dir=None, light_energy=5.0, angle=0.1745):
+        """
+        Add a directional SUN light to the scene.
+        :param name: name of the light
+        :param light_look_at: (x, y, z), starting from (0, 0, 0) to determine light location
+        :param light_energy: energy of light
+        :param angle: shadow angle of the light
+        :return: Scene
+        """
+        if name is None and "sun" not in self.lights:
+            name = "sun"
+        if light_dir is not None:
+            light_iso = Isometry(q=Quaternion(light_dir))
+        else:
+            if light_look_at is None:
+                light_look_at = -Isometry._str_to_axis(self.up_axis)
+            light_iso = Isometry.look_at(light_look_at, np.zeros(3))
+        return self.add_light('SUN', name, light_iso, {'energy': light_energy, 'angle': angle})
 
     def add_light_point(self, name=None, energy=100, radius=0.1, pos=None):
         if pos is None:
@@ -1321,10 +1340,13 @@ class Scene:
 
         for mesh_name, mesh_obj in self.objects.items():
             mat = mesh_obj.get_filament_material(self.viewport_shading, int(self.point_size))
-            # Origin is mesh_obj.get_transformed()
-            sv.add_geometry(mesh_name, mesh_obj.geom, mat)
-            scene.set_geometry_transform(mesh_name, mesh_obj.pose.matrix)
-            scene.set_geometry_double_sided(mesh_name, not self.backface_culling)
+            if "text" in mesh_obj.attributes:
+                sv.add_3d_label(mesh_obj.pose @ mesh_obj.attributes["text_pos"], mesh_obj.attributes["text"])
+            else:
+                # Origin is mesh_obj.get_transformed()
+                sv.add_geometry(mesh_name, mesh_obj.geom, mat)
+                scene.set_geometry_transform(mesh_name, mesh_obj.pose.matrix)
+                scene.set_geometry_double_sided(mesh_name, not self.backface_culling)
 
         import open3d.visualization.rendering as o3dr
         scene.view.set_color_grading(o3dr.ColorGrading(o3dr.ColorGrading.Quality.ULTRA,
@@ -1394,7 +1416,7 @@ class Scene:
             self.camera_intrinsic = CameraIntrinsic.from_open3d_intrinsic(cam_param.intrinsic)
         if self.cam_path is not None:
             self.save_camera()
-        print(f"Camera parameter saved! w={self.camera_intrinsic.w}, h={self.camera_intrinsic.h}")
+        logger.info(f"Camera parameter saved! w={self.camera_intrinsic.w}, h={self.camera_intrinsic.h}")
         return False
 
     def preview(self, allow_change_pose=True, add_ruler=True, title="Render Preview", use_new_api=False,
@@ -1435,10 +1457,12 @@ class Scene:
         if self.additional_blender_commands:
             blender.send_eval(self.additional_blender_commands)
 
-    def setup_blender_and_detach(self, pause: bool = True):
+    def setup_blender_and_detach(self, pause: bool = True, save_path: Path = None):
         self._setup_blender_static()
         if self.animator.is_enabled():
             self.animator.send_blender()
+        if save_path is not None:
+            blender.send_save(Path(save_path))
         blender.send_detach()
         if pause:
             logger.info("Blender exported. The process is no longer controlled by pycg.")
@@ -1616,55 +1640,119 @@ class BaseTheme:
     def apply_to(self, scene: Scene):
         raise NotImplementedError
 
+    @classmethod
+    def determine_sun_iso(cls, scene: Scene, back_deg, right_deg):
+        light_iso = Isometry.look_at(np.zeros(3), Isometry._str_to_axis(scene.up_axis))
+        proj_dir = light_iso.matrix[:3, :2]
+        cam_dir = scene.camera_pose.matrix[:3, [0, 2]]
+        cam_uv = proj_dir @ np.linalg.lstsq(proj_dir, cam_dir, rcond=None)[0]
+        light_dir = Isometry.from_axis_angle(cam_uv[:, 0], back_deg) @ \
+                    Isometry.from_axis_angle(cam_uv[:, 1], -right_deg) @ light_iso
+        return light_dir
 
-class IndoorRoomTheme(BaseTheme):
+
+class ThemeAngela(BaseTheme):
     class Color:
         MILD_AQUA = (0.555, 0.769, 0.926)
         PAPER_WOOD = ()
         GRAY = ()
 
-    def __init__(self, base_color=Color.MILD_AQUA, sun_tilt_degrees=0.):
+    def __init__(self, base_color=Color.MILD_AQUA, smooth_shading: bool = False,
+                 sun_tilt_right: float = 0.0, sun_tilt_back: float = 20.0,
+                 sun_energy: float = 1.5, sun_angle: float = 45.7):
         super().__init__('''
         Indoor Room Theme v1.0 (target: blender)
             This is ideal for rendering indoor rooms. Remember to crop the ceiling!
-            Parameters:
-                base_color: controls the color of the room.
-                sun_tilt_degrees: how the sun direction should be biased towards the current camera.
         ''')
-        self.base_color = base_color
-        self.sun_tilt = sun_tilt_degrees / 180.0 * np.pi
+        self.base_color = copy.deepcopy(base_color)
+        self.smooth_shading = smooth_shading
+        self.sun_tilt_right = sun_tilt_right
+        self.sun_tilt_back = sun_tilt_back
+        self.sun_energy = sun_energy
+        self.sun_angle = sun_angle
 
     def apply_to(self, scene):
-        scene.ambient_color = (1.0, 1.0, 1.0, 0.6)
-        for obj_geom in scene.objects.values():
-            if isinstance(obj_geom.geom, o3d.geometry.TriangleMesh):
-                obj_geom.geom.paint_uniform_color(self.base_color)
-            obj_geom.attributes = {}
-        scene.film_transparent = True
         scene.lights.clear()
-        scene.add_light_sun("sun", light_energy=1.5, angle=45.7 / 180.0 * 3.14)
+        scene.film_transparent = True
+        scene.viewport_shading = 'LIT'
+        scene.remove_object('auto_plane', non_exist_ok=True)
+        scene.env_map = None
+        for o in scene.objects.values():
+            if self.base_color is not None:
+                o.attributes['uniform_color'] = [*self.base_color, 1.0]
+            o.attributes['smooth_shading'] = self.smooth_shading
+            o.attributes['material.ao'] = {"on": False}
+        scene.ambient_color = (1.0, 1.0, 1.0, 0.6)
+
+        light_iso = self.determine_sun_iso(scene, self.sun_tilt_back, self.sun_tilt_right)
+        scene.add_light_sun(
+            light_dir=light_iso.q.q, light_energy=self.sun_energy, angle=self.sun_angle / 180.0 * np.pi)
+        scene.additional_blender_commands = "bpy.data.scenes[0].view_settings.view_transform = 'Standard'"
 
 
-class DiffuseShadow(BaseTheme):
-    def __init__(self):
+class ThemeDiffuseShadow(BaseTheme):
+    def __init__(self, base_color=None, smooth_shading: bool = False,
+                 sun_tilt_right: float = 0.0, sun_tilt_back: float = 0.0,
+                 sun_energy: float = 4.5, sun_angle: float = 40.0):
         super().__init__('''
         Diffuse-looking with shadow.
         ''')
+        self.base_color = copy.deepcopy(base_color)
+        self.smooth_shading = smooth_shading
+        self.sun_tilt_right = sun_tilt_right
+        self.sun_tilt_back = sun_tilt_back
+        self.sun_energy = sun_energy
+        self.sun_angle = sun_angle
+
+    def apply_to(self, scene: Scene):
+        scene.lights.clear()
+        scene.film_transparent = True
+        scene.viewport_shading = 'LIT'
+        scene.remove_object('auto_plane', non_exist_ok=True)
+        scene.env_map = None
+        for o in scene.objects.values():
+            if self.base_color is not None:
+                o.attributes['uniform_color'] = [*self.base_color, 1.0]
+            o.attributes['smooth_shading'] = self.smooth_shading
+            o.attributes['material.ao'] = {"on": False}
+        scene.auto_plane(dist_ratio=0.0)
+        scene.ambient_color = (1.0, 1.0, 1.0, 0.0)
+
+        light_iso = self.determine_sun_iso(scene, self.sun_tilt_back, self.sun_tilt_right)
+        scene.add_light_sun(
+            light_dir=light_iso.q.q, light_energy=self.sun_energy, angle=self.sun_angle / 180.0 * np.pi)
+        scene.additional_blender_commands = "bpy.data.scenes[0].view_settings.view_transform = 'Standard'"
 
 
-class DiffuseTransparentShadow(BaseTheme):
-    pass
+class ThemeNKSR(BaseTheme):
+    def __init__(self, base_color=[0.8, 0.8, 0.8], smooth_shading: bool = False, need_plane: bool = False):
+        super().__init__('''
+        Rendering theme used for NKSR v1.0 (target: blender & filament).
+        ''')
+        self.base_color = copy.deepcopy(base_color)
+        self.smooth_shading = smooth_shading
+        self.need_plane = need_plane
+
+    def apply_to(self, scene: Scene):
+        scene.lights.clear()
+        scene.film_transparent = True
+        scene.viewport_shading = 'LIT'
+        scene.remove_object('auto_plane', non_exist_ok=True)
+        for o in scene.objects.values():
+            if self.base_color is not None:
+                o.attributes['uniform_color'] = [*self.base_color, 1.0]
+            o.attributes['material.ao'] = {"on": True, "gamma": 2.0, "strength": 0.5}
+            o.attributes['smooth_shading'] = self.smooth_shading
+        if self.need_plane:
+            scene.auto_plane(dist_ratio=0.0)
+            scene.objects['auto_plane'].attributes['cycles.is_shadow_catcher'] = True
+        scene.ambient_color = (1.0, 1.0, 1.0, 1.0)
+        scene.env_map = image.read(get_assets_path() / "envmaps" / "rainforest.hdr")
+        scene.set_filament_env_map("pycg-rainforest")
+        scene.additional_blender_commands = "bpy.data.scenes[0].view_settings.view_transform = 'Filmic'"
 
 
-class NaturalEnvMaps(BaseTheme):
-    """
-    Use the env-maps here: https://polyhaven.com/
-        - Add functionality to the Scene.
-    """
-    pass
-
-
-def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=None,
+def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=None, pitch_angle=20.0,
                     viewport_shading='NORMAL', backend='filament'):
     """
     Headless render a multiview image of geometry list, mainly used for training visualization.
@@ -1683,47 +1771,15 @@ def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=No
     multiview_pics = []
     for view_angle in [0.0, 90.0, 180.0, 270.0]:
         scene.quick_camera(w=width, h=height, fov=45.0, up_axis=up_axis,
-                           fill_percent=0.7, plane_angle=view_angle + 45.0)
+                           fill_percent=0.7, plane_angle=view_angle + 45.0,
+                           pitch_angle=pitch_angle)
         if backend == 'opengl':
             my_pic = scene.render_opengl()
         elif backend == 'filament':
-            my_pic = scene.render_filament(headless=True)
+            my_pic = scene.render_filament()
         elif backend == 'pyrender':
             my_pic = scene.render_pyrender()
         else:
             raise NotImplementedError
         multiview_pics.append(my_pic)
     return image.hlayout_images(multiview_pics)
-
-
-def render_depth_open3d(render_group_lists: list, camera_list: list, camera_intrinsic: CameraIntrinsic):
-    assert False, "Please use vis.RayDistanceQuery instead."
-
-    n_group = len(render_group_lists)
-
-    depth_maps = []
-    obid_maps = []
-    engine = o3d.visualization.Visualizer()
-    engine.create_window(width=camera_intrinsic.w, height=camera_intrinsic.h, visible=False)
-    for group_id in range(n_group):
-        cur_cam = camera_list[group_id]
-        for part_id, part_mesh in enumerate(render_group_lists[group_id]):
-            # Used for indexing.
-            part_mesh.paint_uniform_color([(part_id + 1) * 8 / 255.0, 0, 0])
-            engine.add_geometry(part_mesh)
-        engine.get_view_control().convert_from_pinhole_camera_parameters(
-            camera_intrinsic.get_pinhole_camera_param(cur_cam, fix_bug=True)
-        )
-        captured_depth = engine.capture_depth_float_buffer(do_render=True)
-        captured_depth = np.asarray(captured_depth)
-        # Note: We should create a separate frame buffer object for this to work.
-        #   In that sense
-        captured_rgb = engine.capture_screen_float_buffer(do_render=True)
-        captured_rgb = (np.asarray(captured_rgb) * 255.0).astype(np.uint8)
-        captured_indexes = captured_rgb[:, :, 0] // 8
-
-        depth_maps.append(captured_depth)
-        obid_maps.append(captured_indexes)
-        engine.clear_geometries()
-
-    return depth_maps, obid_maps

@@ -35,6 +35,16 @@ def get_object(name):
     return target_object
 
 
+def rebuild_world_surface():
+    cur_world = bpy.context.scene.world
+    nodes = cur_world.node_tree.nodes
+    links = cur_world.node_tree.links
+    if bpy.data.images.get("EnvTex") is not None:
+        bpy.data.images.remove(bpy.data.images.get("EnvTex"), do_unlink=True)
+    nodes.clear()
+    return nodes, links
+
+
 def handle_cmds(msg):
     if msg['cmd'] == 'entity':
         logging.info(f"Command entity: draw {msg['geometry_type']}.")
@@ -55,6 +65,11 @@ def handle_cmds(msg):
         # Clear camera and base animations
         get_object('relative_camera').animation_data_clear()
         get_object('camera_base').animation_data_clear()
+        # Clear envmaps
+        nodes, links = rebuild_world_surface()
+        background_node = nodes.new(type='ShaderNodeBackground')
+        output_node = nodes.new(type='ShaderNodeOutputWorld')
+        links.new(background_node.outputs[0], output_node.inputs[0])
         return {'result': 'success'}
     elif msg['cmd'] == 'camera':
         cur_scene = bpy.context.scene
@@ -162,13 +177,7 @@ def handle_cmds(msg):
         return {'result': 'added'}
 
     elif msg['cmd'] == 'envmap':
-        cur_world = bpy.context.scene.world
-        cur_world.use_nodes = True
-        nodes = cur_world.node_tree.nodes
-        links = cur_world.node_tree.links
-        if bpy.data.images.get("EnvTex") is not None:
-            bpy.data.images.remove(bpy.data.images.get("EnvTex"), do_unlink=True)
-        nodes.clear()
+        nodes, links = rebuild_world_surface()
 
         # Create new image containing the env texture
         env_tex_node = nodes.new(type='ShaderNodeTexEnvironment')
@@ -206,6 +215,10 @@ def handle_cmds(msg):
 
     elif msg['cmd'] == 'eval':
         exec(msg['script'])
+        return {'result': 'success'}
+
+    elif msg['cmd'] == 'save':
+        bpy.ops.wm.save_as_mainfile(msg['path'])
         return {'result': 'success'}
 
     elif msg['cmd'] == 'detach':
@@ -252,9 +265,12 @@ class ClientOperator(bpy.types.Operator):
                 logging.error(e)
                 res = {'result': 'failed'}
             except ConnectionRefusedError as e:
-                self.conn_manager.shutdown()
+                try:
+                    self.conn_manager.shutdown()
+                except ReferenceError:
+                    pass
                 context.window_manager.event_timer_remove(self._timer)
-                print("Client about to shut-down.")
+                logging.info("Master detached.")
                 return {'CANCELLED'}
             if res is not None:
                 self.res_queue.put(res)
@@ -265,8 +281,6 @@ class ClientOperator(bpy.types.Operator):
         self.conn_manager.start()
         self.res_queue = self.conn_manager.res_queue()
         self.cmd_queue = self.conn_manager.cmd_queue()
-        context.window_manager.modal_handler_add(self)
-
         ClientOperator.global_res_queue = self.res_queue
 
         wm = context.window_manager
@@ -275,13 +289,7 @@ class ClientOperator(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
     def cancel(self, context):
-        try:
-            self.conn_manager.shutdown()
-        except ReferenceError:
-            return
-        wm = context.window_manager
-        wm.event_timer_remove(self._timer)
-        logging.info("Client shut down.")
+        pass
 
 
 class PYCG_OT_host_notify(bpy.types.Operator):

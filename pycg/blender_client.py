@@ -1,22 +1,35 @@
-from multiprocessing.managers import BaseManager
 import queue
 import time
 import socket
-import yaml
 from pathlib import Path
 import subprocess
+import os, shutil
 import open3d as o3d
 import numpy as np
 from pycg.isometry import Isometry
+from pycg.exp import logger
 from pyquaternion import Quaternion
+from multiprocessing.managers import BaseManager
 
 
-RENDER_CONFIG_PATH = Path(__file__).parent / "render.yaml"
-try:
-    with RENDER_CONFIG_PATH.open() as f:
-        BLENDER_EXEC_PATH = Path(yaml.load(f, Loader=yaml.FullLoader)["blender_base"])
-except FileNotFoundError:
-    pass
+BLENDER_EXEC_PATH = None
+
+
+def find_blender(force_refind: bool = False):
+    global BLENDER_EXEC_PATH
+    if BLENDER_EXEC_PATH is not None and not force_refind:
+        return BLENDER_EXEC_PATH
+
+    if 'BLENDER_HOME' in os.environ:
+        BLENDER_EXEC_PATH = os.environ['BLENDER_HOME']
+    else:
+        BLENDER_EXEC_PATH = shutil.which('blender')
+
+    if BLENDER_EXEC_PATH is None:
+        raise FileNotFoundError("Could not find Blender. Please specify its path in BLENDER_HOME environment variable!")
+
+    logger.info(f"Find blender in {BLENDER_EXEC_PATH}")
+    return BLENDER_EXEC_PATH
 
 
 class BlenderConnection:
@@ -33,7 +46,7 @@ class BlenderConnection:
         location = ("localhost", self.port)
         result_of_check = a_socket.connect_ex(location)
         if result_of_check != 0:
-            pg = subprocess.Popen([BLENDER_EXEC_PATH, '--python',
+            pg = subprocess.Popen([find_blender(), '--python',
                                    str(Path(__file__).parent / "blender_server" / "main.py"),
                                    '--', '--port', str(self.port)])
 
@@ -65,6 +78,15 @@ class BlenderConnection:
                 return None
         else:
             return self.res_queue.get()
+
+    def close(self):
+        # Poll until EOF
+        while True:
+            time.sleep(0.5)
+            try:
+                self.res_queue.get()
+            except EOFError:
+                break
 
 
 _blender_connection = BlenderConnection()
@@ -253,10 +275,17 @@ def send_clear():
     assert res_dict['result'] == 'success'
 
 
+def send_save(path: Path):
+    _blender_connection.send({'cmd': 'save', 'path': path.resolve()})
+    res_dict = _blender_connection.receive(nowait=False)
+    assert res_dict['result'] == 'success'
+
+
 def send_detach():
     global _blender_connection
     _blender_connection.send({'cmd': 'detach'})
-    # _blender_connection = BlenderConnection()
+    _blender_connection.close()
+    _blender_connection = BlenderConnection()
 
 
 def poll_finished():
@@ -266,18 +295,11 @@ def poll_finished():
 
 def poll_notified():
     while True:
-        res_dict = _blender_connection.receive(nowait=False)
+        try:
+            res_dict = _blender_connection.receive(nowait=False)
+        except EOFError:
+            logger.error("Connection aborted while polling")
+            raise
         if res_dict['result'] == 'notify':
             break
         print(f"Poll-notified: expected notify, but get {res_dict}")
-
-
-if __name__ == '__main__':
-    pcd = o3d.io.read_point_cloud("/home/huangjh/shared-home/deep-multibody/dataset/self_capture/2/2-1.origin.ply")
-    send_entity(pcd)
-    # geom = o3d.io.read_triangle_mesh("/home/huangjh/shared-home/implicit-slam/outputs/lr_kt0_best/map-0.11.obj")
-    # send_entity(geom)
-    # poll_finished()
-
-    poll_notified()
-    print("done!!!!")

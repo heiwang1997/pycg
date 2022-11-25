@@ -6,6 +6,7 @@ import os
 from pycg.exp import logger
 from pyquaternion import Quaternion
 
+
 def so3_vee(Phi):
     if Phi.ndim < 3:
         Phi = np.expand_dims(Phi, axis=0)
@@ -18,6 +19,7 @@ def so3_vee(Phi):
     phi[:, 1] = Phi[:, 0, 2]
     phi[:, 2] = Phi[:, 1, 0]
     return np.squeeze(phi)
+
 
 def so3_wedge(phi):
     phi = np.atleast_2d(phi)
@@ -43,6 +45,7 @@ def so3_log(matrix):
         return so3_vee(matrix - np.identity(3))
     else:
         return so3_vee((0.5 * angle / np.sin(angle)) * (matrix - matrix.T))
+
 
 # Please note that the right jacobian is just J_r(xi) = -J_l(xi) for both SO3 and SE3
 
@@ -267,8 +270,8 @@ class Isometry:
 
     @property
     def continuous_repr(self):
-        rot = self.q.rotation_matrix[:, 0:2].T.flatten()    # (6,)
-        return np.concatenate([rot, self.t])                # (9,)
+        rot = self.q.rotation_matrix[:, 0:2].T.flatten()  # (6,)
+        return np.concatenate([rot, self.t])  # (9,)
 
     @staticmethod
     def from_continuous_repr(rep, gs=True):
@@ -358,7 +361,8 @@ class Isometry:
         pc2 = np.copy(xyz + flow)
         pc1_mean = np.mean(pc1, axis=0)
         pc2_mean = np.mean(pc2, axis=0)
-        pc1 -= pc1_mean; pc2 -= pc2_mean
+        pc1 -= pc1_mean;
+        pc2 -= pc2_mean
         cov = pc1.T @ pc2
         u, _, vh = np.linalg.svd(cov, compute_uv=True)
         R = vh.T @ u.T
@@ -398,11 +402,11 @@ class Isometry:
 
     def __matmul__(self, other):
         # "@" operator: other can be (N,3) or (3,).
-        if hasattr(other, "device"):        # Torch tensor
+        if hasattr(other, "device"):  # Torch tensor
             th_R, th_t = self.torch_matrices(other.device)
             if other.ndim == 2 and other.size(1) == 3:  # (N,3)
                 return other @ th_R.t() + th_t.unsqueeze(0)
-            elif other.ndim == 1 and other.size(0) == 3: # (3,)
+            elif other.ndim == 1 and other.size(0) == 3:  # (3,)
                 return th_R @ other + th_t
             else:
                 raise NotImplementedError
@@ -427,13 +431,13 @@ class Isometry:
     def validified(self):
         q = self.q.normalised
         if np.any(np.isnan(q.q)) or np.any(np.isinf(q.q)):
-            print("Warning: Isometry.validified get invalid q.")
+            logger.warning("Isometry.validified get invalid q.")
             q = Quaternion()
 
         t = np.copy(self.t)
         if np.any(np.isnan(t)) or np.any(np.isinf(t)):
-            print("Warning: Isometry.validified get invalid t.")
-            t = np.zeros((3, ))
+            logger.warning("Isometry.validified get invalid t.")
+            t = np.zeros((3,))
 
         return Isometry(q=q, t=t)
 
@@ -442,6 +446,7 @@ class ScaledIsometry:
     """
     s (Rx + t), applied outside
     """
+
     def __init__(self, s=1.0, iso: Isometry = None):
         if iso is None:
             iso = Isometry()

@@ -211,6 +211,8 @@ class AssetManager:
     @classmethod
     def clear_all(cls):
         for datum in cls.data.values():
+            if datum.object.active_material is not None:
+                bpy.data.materials.remove(datum.object.active_material, do_unlink=True)
             if datum.object.data is None:
                 bpy.data.objects.remove(datum.object, do_unlink=True)
             else:

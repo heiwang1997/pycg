@@ -6,3 +6,7 @@ theme:
     primary: amber
     scheme: default
 repo_url: https://github.com/heiwang1997/pycg
+nav:
+  - index.md
+  - vis.md
+  - render.md

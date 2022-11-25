@@ -102,7 +102,22 @@ def transparent(geom, alpha: float = 0.5):
     return my_geom
 
 
-def text_3d(text, pos, direction=None, degree=0.0, font='DejaVuSansMono.ttf', font_size=16):
+def text(text: str, pos, is_mesh: bool = False, text_height: float = 0.2):
+    if is_mesh:
+        # Default height is 16x16 pixels
+        text_mesh = o3d.t.geometry.TriangleMesh.create_text(text, depth=1).to_legacy()
+        text_mesh.scale(1.0 / 16 * text_height, center=[0.0, 0.0, 0.0])
+        text_mesh.translate(pos)
+        text_mesh.compute_vertex_normals()
+        return text_mesh
+    else:
+        text_geom = AnnotatedGeometry(text_pcd(text, pos), None)
+        text_geom.attributes["text"] = text
+        text_geom.attributes["text_pos"] = np.asarray(pos)
+        return text_geom
+
+
+def text_pcd(text, pos, direction=None, degree=0.0, font='DejaVuSansMono.ttf', font_size=16):
     """
     Generate a 3D text point cloud used for visualization.
     :param text: content of the text
@@ -196,7 +211,7 @@ def layout_entities(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None
 def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout=None, margin=1.0,
             x_labels=None, y_labels=None, z_labels=None, show=True, use_new_api=False, group_names=None, cam_path=None,
             key_bindings=None, separate_windows=True, point_size=5.0, scale=1.0, default_camera_kwargs=None,
-            viewport_shading='LIT', auto_plane=False):
+            viewport_shading='LIT', auto_plane=False, up_axis="+Y"):
     import pycg.render as render
 
     scenes = []
@@ -239,12 +254,12 @@ def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout
                                                                 margin=margin,
                                                                 x_labels=x_labels, y_labels=y_labels, z_labels=z_labels,
                                                                 group_names=gn)
-        scene = render.Scene(cam_path=cam_path)
+        scene = render.Scene(cam_path=cam_path, up_axis=up_axis)
         for (vis_geom, vis_pose), geom_name in zip(flattened_identities, flattened_names):
             scene.add_object(geom=vis_geom, pose=vis_pose, name=geom_name)
 
         if auto_plane:
-            scene.auto_plane('-Y', dist_ratio=0.02, scale=1.0)
+            scene.auto_plane(dist_ratio=0.02, scale=1.0)
 
         if cam_path is None or not Path(cam_path).exists():
             scene.quick_camera(**default_camera_kwargs)
