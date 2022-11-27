@@ -8,7 +8,7 @@ from pathlib import Path
 
 __author__ = "Jiahui Huang"
 __license__ = "MIT"
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 
 def get_assets_path():
