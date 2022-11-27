@@ -28,6 +28,20 @@ setup(
     ],
     keywords=['pycg', 'graphics', '3d', 'visualization'],
     python_requires='>=3.6',
-    install_requires=[],
+    install_requires=[
+        "numpy",
+        "matplotlib",
+        "pyquaternion",
+        "pyyaml",
+        "omegaconf",
+        "scipy",
+        "screeninfo",
+        "tqdm",
+        "pillow",
+        "open3d==0.16.1+588709611"
+    ],
+    dependency_links=[
+        'http://eagle.huangjh.tech:8080/simple'
+    ],
     include_package_data=True,
 )

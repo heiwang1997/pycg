@@ -1,15 +1,19 @@
+"""
+Copyright 2022 by Jiahui Huang. All rights reserved.
+This file is part of PyCG toolbox and is released under "MIT License Agreement".
+Please see the LICENSE file that should have been included as part of this package.
+"""
+
 import copy
-import time
 import numpy as np
 import open3d as o3d
 import matplotlib.colors
 import matplotlib.cm
-import torch
 import math
 
-from .isometry import Isometry
-from .color import map_quantized_color
-from .exp import logger
+from pycg.isometry import Isometry
+from pycg.color import map_quantized_color
+from pycg.exp import logger
 from pyquaternion import Quaternion
 from pathlib import Path
 from typing import List, Dict, Tuple, Union, Iterable
@@ -194,15 +198,15 @@ def layout_entities(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None
 
     # Draw labels.
     for xi, x_label in enumerate(x_labels):
-        all_identities.append((text_3d(x_label, [0.0, 0.0, 0.0]), Isometry(t=xi * gaps_dx - gaps_dy)))
+        all_identities.append((text(x_label, [0.0, 0.0, 0.0]), Isometry(t=xi * gaps_dx - gaps_dy)))
         flattened_names.append(None if group_names is None else f"x-label-{xi}")
 
     for yi, y_label in enumerate(y_labels):
-        all_identities.append((text_3d(y_label, [0.0, 0.0, 0.0]), Isometry(t=yi * gaps_dy - gaps_dx)))
+        all_identities.append((text(y_label, [0.0, 0.0, 0.0]), Isometry(t=yi * gaps_dy - gaps_dx)))
         flattened_names.append(None if group_names is None else f"y-label-{yi}")
 
     for zi, z_label in enumerate(z_labels):
-        all_identities.append((text_3d(z_label, [0.0, 0.0, 0.0]), Isometry(t=zi * gaps_dz)))
+        all_identities.append((text(z_label, [0.0, 0.0, 0.0]), Isometry(t=zi * gaps_dz)))
         flattened_names.append(None if group_names is None else f"z-label-{zi}")
 
     return all_identities, flattened_names
@@ -571,37 +575,6 @@ def sphere_from_pc(pcd: o3d.geometry.PointCloud, radius: float = 0.02, resolutio
 def surfel_from_pc(pcd: o3d.geometry.PointCloud, radius: float = 0.02, resolution: int = 5):
     assert pcd.has_normals(), "Point Cloud must have normals!"
 
-    # If infinite resolution do Poisson Reconstruction instead.
-    if resolution == 0:
-        # radii = [0.005, 0.01, 0.02, 0.04, 0.08, 0.2]
-        # rec_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
-                    # pcd, o3d.utility.DoubleVector(radii))
-        # rec_mesh = rec_mesh.filter_smooth_laplacian(1, 1.0)
-        print("--> Start Poisson", len(pcd.points))
-        # with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Debug) as cm:
-        rec_mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
-        print("--> End Poisson")
-
-        # Delete all triangles whose center cannot find an NN.
-        rec_vertices = np.asarray(rec_mesh.vertices)
-        rec_triangles = np.asarray(rec_mesh.triangles)
-        rec_tri_center = (rec_vertices[rec_triangles[:, 0]] +
-                        rec_vertices[rec_triangles[:, 1]] +
-                        rec_vertices[rec_triangles[:, 2]]) / 3.0
-        from sklearn.neighbors import NearestNeighbors
-        nbrs = NearestNeighbors(n_neighbors=1).fit(pc)
-        distances, _ = nbrs.kneighbors(rec_tri_center, return_distance=True)
-        rec_triangles = rec_triangles[distances[:, 0] < 0.01]
-        rec_mesh.triangles = o3d.utility.Vector3iVector(rec_triangles)
-        # For all vertices assign color.
-
-        if pcd.has_colors():
-            rgb = np.array(pcd.colors)
-            indices = nbrs.kneighbors(np.asarray(rec_mesh.vertices), return_distance=False)
-            rec_mesh.vertex_colors = o3d.utility.Vector3dVector(rgb[indices[:, 0]])
-
-        return rec_mesh
-
     pc, normal = np.array(pcd.points), np.array(pcd.normals)
     normal_x = np.stack([normal[:, 1] - normal[:, 2], -normal[:, 0], normal[:, 0]], axis=-1)
     normal_x /= np.linalg.norm(normal_x, axis=-1, keepdims=True)
@@ -796,10 +769,10 @@ def colored_mesh(*args, **kwargs):
     return mesh(*args, **kwargs)
 
 
-def mesh(mesh_or_vertices: Union[np.ndarray, torch.Tensor, o3d.geometry.TriangleMesh],
-         triangles: Union[np.ndarray, torch.Tensor] = None,
+def mesh(mesh_or_vertices: Union[np.ndarray, "torch.Tensor", o3d.geometry.TriangleMesh],
+         triangles: Union[np.ndarray, "torch.Tensor"] = None,
          color: np.ndarray = None,
-         cid: Union[np.ndarray, torch.Tensor] = None,
+         cid: Union[np.ndarray, "torch.Tensor"] = None,
          ucid: int = None, cmap: str = 'tab10',
          cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False):
     if isinstance(mesh_or_vertices, o3d.geometry.TriangleMesh):
@@ -862,12 +835,12 @@ def transformed_oobb(oobb: o3d.geometry.OrientedBoundingBox, iso: Isometry):
     return oobb
 
 
-def lineset(linset_or_points: Union[np.ndarray, torch.Tensor, o3d.geometry.LineSet],
-            lines: Union[np.ndarray, torch.Tensor] = None,
-            cid: Union[np.ndarray, torch.Tensor] = None,
+def lineset(linset_or_points: Union[np.ndarray, "torch.Tensor", o3d.geometry.LineSet],
+            lines: Union[np.ndarray, "torch.Tensor"] = None,
+            cid: Union[np.ndarray, "torch.Tensor"] = None,
             ucid: int = 0, cmap: str = 'tab10',
             cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False,
-            color: Union[np.ndarray, torch.Tensor] = None):
+            color: Union[np.ndarray, "torch.Tensor"] = None):
     if isinstance(linset_or_points, o3d.geometry.LineSet):
         assert lines is None
         points = np.asarray(linset_or_points.points).copy()
@@ -967,10 +940,10 @@ def wireframe(mesh: o3d.geometry.TriangleMesh):
 
 
 def wireframe_bbox(extent_min=None, extent_max=None, solid=False, tube=False, tube_radius=0.001,
-                   cid: Union[np.ndarray, torch.Tensor] = None,
+                   cid: Union[np.ndarray, "torch.Tensor"] = None,
                    ucid: int = 0, cmap: str = 'tab10',
                    cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False,
-                   color: Union[np.ndarray, torch.Tensor] = None):
+                   color: Union[np.ndarray, "torch.Tensor"] = None):
     if extent_min is None:
         extent_min = [0.0, 0.0, 0.0]
     if extent_max is None:

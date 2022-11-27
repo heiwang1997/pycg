@@ -1,4 +1,9 @@
-# Just a command line wrapper with some presets.
+"""
+Copyright 2022 by Jiahui Huang. All rights reserved.
+This file is part of PyCG toolbox and is released under "MIT License Agreement".
+Please see the LICENSE file that should have been included as part of this package.
+"""
+
 import glob
 import os
 from pathlib import Path

@@ -1,3 +1,9 @@
+"""
+Copyright 2022 by Jiahui Huang. All rights reserved.
+This file is part of PyCG toolbox and is released under "MIT License Agreement".
+Please see the LICENSE file that should have been included as part of this package.
+"""
+
 import bdb
 import shutil
 import sys
@@ -6,7 +12,6 @@ from collections import OrderedDict, defaultdict
 import numpy as np
 import argparse
 
-import torch
 import yaml
 import json
 import pdb
@@ -680,7 +685,8 @@ def mem_profile_class():
     return transform_cls
 
 
-def memory_usage(tensor: torch.Tensor = None):
+def memory_usage(tensor: "torch.Tensor" = None):
+    import torch
     if isinstance(tensor, torch.Tensor):
         size_mb = tensor.element_size() * tensor.nelement() / 1024 / 1024
         size_storage = sys.getsizeof(tensor.storage()) / 1024 / 1024

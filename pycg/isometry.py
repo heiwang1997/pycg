@@ -1,8 +1,12 @@
+"""
+Copyright 2022 by Jiahui Huang. All rights reserved.
+This file is part of PyCG toolbox and is released under "MIT License Agreement".
+Please see the LICENSE file that should have been included as part of this package.
+"""
+
 import copy
 
 import numpy as np
-import json
-import os
 from pycg.exp import logger
 from pyquaternion import Quaternion
 
@@ -169,7 +173,7 @@ def project_orthogonal(rot):
 class Isometry:
     GL_POST_MULT = Quaternion(degrees=180.0, axis=[1.0, 0.0, 0.0])
 
-    def __init__(self, q=None, t=None, s=1.0):
+    def __init__(self, q=None, t=None):
         if q is None:
             q = Quaternion()
         if t is None:
