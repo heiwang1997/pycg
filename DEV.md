@@ -1,5 +1,10 @@
 # Development Guide
 
+- As a developer:
+  - For projects that include pycg and you want to develop it, use it as a submodule.
+  - For projects / enviroments that would modify pycg occasionally, use `develop`
+  - For other projects / environments, just install it and occasionally upgrade it for newest features.
+
 ## Environment setup
 
 For local development, simply run:

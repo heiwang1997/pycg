@@ -344,7 +344,7 @@ class Isometry:
         x_dir /= np.linalg.norm(x_dir)
         y_dir = np.cross(z_dir, x_dir)
         R = np.column_stack([x_dir, y_dir, z_dir])
-        return Isometry(q=Quaternion(matrix=R), t=source)
+        return Isometry(q=Quaternion(matrix=R, rtol=1.0, atol=1.0), t=source)
 
     @staticmethod
     def chordal_l2_mean(*isometries):
