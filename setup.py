@@ -41,7 +41,7 @@ setup(
         "open3d==0.16.1+c65c7ef"
     ],
     dependency_links=[
-        'http://eagle.huangjh.tech:8080/simple'
+        'http://eagle.huangjh.tech:8080/simple/open3d'
     ],
     include_package_data=True,
 )
