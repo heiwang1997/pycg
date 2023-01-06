@@ -1768,6 +1768,7 @@ def multiview_image(geoms: list, width: int = 256, height: int = 256, up_axis=No
     :param up_axis: up axis of scene
     :param viewport_shading: shading used.
     :param backend: opengl, filament, or pyrender
+        --privileged allows us to use VSCode inside docker, but will let pyrender fail :(
     :return: an image.
     """
     scene = Scene()

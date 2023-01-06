@@ -380,7 +380,7 @@ class AutoPdb:
         if exc_val is None:
             return
         if isinstance(exc_val, bdb.BdbQuit):
-            print("Post mortem is skipped because the exception is from Pdb.")
+            logger.info("Post mortem is skipped because the exception is from Pdb.")
         else:
             traceback.print_exc()
             pdb.post_mortem(exc_tb)
@@ -693,7 +693,12 @@ def memory_usage(tensor: "torch.Tensor" = None):
         return f"Torch tensor {list(tensor.size())}, logical {size_mb:.2f}MB, actual {size_storage:.2f}MB."
     elif tensor is None:
         from pytorch_memlab.line_profiler.line_records import readable_size
-        return f"[Active {readable_size(torch.cuda.memory_allocated())}]"
+        pytorch_active = readable_size(torch.cuda.memory_allocated())
+        try:
+            smi_active = readable_size(get_gpu_status("localhost")[0].gpu_mem_byte)
+        except Exception:
+            smi_active = "-"
+        return f"[Active {pytorch_active}, SMI = {smi_active}]"
     else:
         return "Memory usage not supported."
 
@@ -714,6 +719,7 @@ class ComputeDevice:
     def __init__(self):
         self.server_name = None
         self.gpu_id = None
+        self.gpu_mem_byte = None
         self.gpu_mem_usage = None
         self.gpu_compute_usage = None
         self.processes = []
@@ -752,11 +758,14 @@ def get_gpu_status(server_name, get_process_info: bool = False, use_nvml: bool =
             except pynvml.NVMLError_GpuIsLost:
                 print(f"Warning: GPU {gpu_id} is lost.")
                 continue
+            handle_rate = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            handle_memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
             cur_dev = ComputeDevice()
             cur_dev.server_name = server_name
             cur_dev.gpu_id = gpu_id
-            cur_dev.gpu_compute_usage = pynvml.nvmlDeviceGetUtilizationRates(handle).gpu / 100
-            cur_dev.gpu_mem_usage = pynvml.nvmlDeviceGetUtilizationRates(handle).memory / 100
+            cur_dev.gpu_compute_usage = handle_rate.gpu / 100
+            cur_dev.gpu_mem_usage = handle_rate.memory / 100
+            cur_dev.gpu_mem_byte = handle_memory.used
             all_devs.append(cur_dev)
         pynvml.nvmlShutdown()
         proc_info = []
@@ -769,6 +778,7 @@ def get_gpu_status(server_name, get_process_info: bool = False, use_nvml: bool =
             cur_dev.server_name = server_name
             cur_dev.gpu_id = gpu_id
             cur_dev.gpu_mem_usage = int(cur_mem) / int(all_mem)
+            cur_dev.gpu_mem_byte = cur_mem * 1024 * 1024
             cur_dev.gpu_compute_usage = int(cur_util) / 100
             all_devs.append(cur_dev)
 

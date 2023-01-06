@@ -1,16 +1,16 @@
 # Development Guide
 
-- As a developer:
-  - For projects that include pycg and you want to develop it, use it as a submodule.
-  - For projects / enviroments that would modify pycg occasionally, use `develop`
-  - For other projects / environments, just install it and occasionally upgrade it for newest features.
-
 ## Environment setup
 
-For local development, simply run:
+- For projects / enviroments that would modify / develop pycg, use `develop`:
 ```shell
 python setup.py develop
+
+# Fix linting/IntelliSense [one-time operation, optional]
+bash dev_link.sh
 ```
+
+- For other projects / environments, just install it and occasionally upgrade it for newest features.
 
 ## Version bump
 
@@ -23,6 +23,7 @@ python setup.py develop
 
 - If you are working locally:
 ```shell
+python -m pip install --upgrade build twine
 python -m build
 # Upload both source and wheel.
 twine upload dist/*
