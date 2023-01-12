@@ -789,6 +789,10 @@ def mesh(mesh_or_vertices: Union[np.ndarray, "torch.Tensor", o3d.geometry.Triang
 
     if color is not None:
         color = ensure_from_torch(color, 2)
+        assert color.shape[0] == vertices.shape[0], f"vertex and color must have same size " \
+                                                    f"{color.shape[0]}, {vertices.shape[0]}"
+        if color.dtype == np.uint8:
+            color = color.astype(float) / 255.
 
     mesh = o3d.geometry.TriangleMesh()
     mesh.vertices = o3d.utility.Vector3dVector(vertices)
@@ -810,7 +814,7 @@ def mesh(mesh_or_vertices: Union[np.ndarray, "torch.Tensor", o3d.geometry.Triang
         color = matplotlib.cm.get_cmap(cfloat_cmap)(cfloat)[:, :3]
 
     if color is not None:
-        mesh.vertex_colors = o3d.utility.Vector3dVector(color)
+        mesh.vertex_colors = o3d.utility.Vector3dVector(color[:, :3])
 
     # if not mesh.has_vertex_normals():
     mesh.compute_vertex_normals()

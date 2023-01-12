@@ -687,18 +687,23 @@ def mem_profile_class():
 
 def memory_usage(tensor: "torch.Tensor" = None):
     import torch
+    from pytorch_memlab.line_profiler.line_records import readable_size
+
     if isinstance(tensor, torch.Tensor):
-        size_mb = tensor.element_size() * tensor.nelement() / 1024 / 1024
-        size_storage = sys.getsizeof(tensor.storage()) / 1024 / 1024
-        return f"Torch tensor {list(tensor.size())}, logical {size_mb:.2f}MB, actual {size_storage:.2f}MB."
+        size_mb = readable_size(tensor.element_size() * tensor.nelement())
+        size_storage = readable_size(sys.getsizeof(tensor.storage()))
+        return f"Torch tensor {list(tensor.size())}, logical {size_mb}, actual {size_storage}."
     elif tensor is None:
-        from pytorch_memlab.line_profiler.line_records import readable_size
         pytorch_active = readable_size(torch.cuda.memory_allocated())
         try:
             smi_active = readable_size(get_gpu_status("localhost")[0].gpu_mem_byte)
         except Exception:
             smi_active = "-"
         return f"[Active {pytorch_active}, SMI = {smi_active}]"
+    elif isinstance(tensor, str) and tensor == "lost":
+        pytorch_reserved = torch.cuda.memory_reserved()
+        smi_active = get_gpu_status("localhost")[0].gpu_mem_byte
+        return f"[Lost {readable_size(smi_active - pytorch_reserved)}]"
     else:
         return "Memory usage not supported."
 
