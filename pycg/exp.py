@@ -725,6 +725,7 @@ class ComputeDevice:
         self.server_name = None
         self.gpu_id = None
         self.gpu_mem_byte = None
+        self.gpu_mem_total = None
         self.gpu_mem_usage = None
         self.gpu_compute_usage = None
         self.processes = []
@@ -771,6 +772,7 @@ def get_gpu_status(server_name, get_process_info: bool = False, use_nvml: bool =
             cur_dev.gpu_compute_usage = handle_rate.gpu / 100
             cur_dev.gpu_mem_usage = handle_rate.memory / 100
             cur_dev.gpu_mem_byte = handle_memory.used
+            cur_dev.gpu_mem_total = handle_memory.total
             all_devs.append(cur_dev)
         pynvml.nvmlShutdown()
         proc_info = []
@@ -784,6 +786,7 @@ def get_gpu_status(server_name, get_process_info: bool = False, use_nvml: bool =
             cur_dev.gpu_id = gpu_id
             cur_dev.gpu_mem_usage = int(cur_mem) / int(all_mem)
             cur_dev.gpu_mem_byte = cur_mem * 1024 * 1024
+            cur_dev.gpu_mem_total = all_mem * 1024 * 1024
             cur_dev.gpu_compute_usage = int(cur_util) / 100
             all_devs.append(cur_dev)
 
