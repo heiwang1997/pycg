@@ -5,10 +5,13 @@ Please see the LICENSE file that should have been included as part of this packa
 """
 
 from pathlib import Path
+from .isometry import Isometry, ScaledIsometry
 
 __author__ = "Jiahui Huang"
 __license__ = "MIT"
-__version__ = '0.2.0'
+__version__ = '0.3.0'
+
+__all__ = ["Isometry", "ScaledIsometry"]
 
 
 def get_assets_path():

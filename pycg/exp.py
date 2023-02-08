@@ -594,6 +594,12 @@ def pt_profile(func):
         return func
 
 
+def readable_size(num_bytes):
+    from math import isnan
+    from calmsize import size as calmsize
+    return '' if isnan(num_bytes) else '{:.2f}'.format(calmsize(num_bytes))
+
+
 # Monkey Patch pytorch_memlab:
 if 'MEM_PROFILE' in os.environ.keys():
     mem_profile_spec = os.environ['MEM_PROFILE']
@@ -605,7 +611,7 @@ if 'MEM_PROFILE' in os.environ.keys():
 
     if mem_profile_spec == 1:
 
-        from pytorch_memlab.line_profiler.line_records import RecordsDisplay, readable_size
+        from pytorch_memlab.line_profiler.line_records import RecordsDisplay
 
         def new_repr(self):
             recorded_func_names = self._line_records.index.levels[0]
@@ -687,7 +693,6 @@ def mem_profile_class():
 
 def memory_usage(tensor: "torch.Tensor" = None):
     import torch
-    from pytorch_memlab.line_profiler.line_records import readable_size
 
     if isinstance(tensor, torch.Tensor):
         size_mb = readable_size(tensor.element_size() * tensor.nelement())

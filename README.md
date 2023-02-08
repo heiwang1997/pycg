@@ -7,15 +7,22 @@ I'm writing the document of this. Please do not use it unless you are someone in
 
 ## Install
 
-You could either do:
-```shell
-pip install -U python-pycg --extra-index-url http://eagle.huangjh.tech:8080/simple --trusted-host eagle.huangjh.tech
+To install a full-fledged version, use:
+```bash
+pip install -U python-pycg[full] -f https://pycg.s3.ap-northeast-1.amazonaws.com/packages/index.html
 ```
 
-> Note that the need for the extra index URL if for our [customized version of Open3D](https://github.com/heiwang1997/Open3D) (with support for multi-window camera/light synchronization, animation maker and visualizer, scalar analyzer, etc). If you don't want this, it's still fine. You can use the normal Open3D.
+> Note that the need for the extra index URL if for our [customized version of Open3D](https://github.com/heiwang1997/Open3D) (with support for multi-window camera/light synchronization, animation maker and visualizer, scalar analyzer, etc).
 
-Or clone this repository and install it if you want to use newest features:
+If you don't want to use our customized Open3D, simply do:
+```shell
+pip install -U python-pycg[all]
+```
+
+By default, Open3D will not be installed if you do `pip install python-pycg` directly, but all other non-visualization-related functions should work!
+
+For developers, clone this repository and install it if you want to use newest features:
 ```shell
 git clone --recursive https://github.com/heiwang1997/pycg
-python setup.py develop
+pip install .
 ```

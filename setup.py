@@ -9,6 +9,7 @@ with open("pycg/__init__.py", "r") as fh:
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
+advanced_req = ["scipy", "screeninfo", "pillow"]
 
 setup(
     name='python-pycg',
@@ -34,14 +35,17 @@ setup(
         "pyquaternion",
         "pyyaml",
         "omegaconf",
-        "scipy",
-        "screeninfo",
         "tqdm",
-        "pillow",
-        "open3d==0.16.1+c65c7ef"
+        "pynvml",
+        "calmsize",
     ],
-    dependency_links=[
-        'http://eagle.huangjh.tech:8080/simple/open3d'
-    ],
+    extras_require={
+        "all": [
+            *advanced_req, "open3d"
+        ],
+        "full": [
+            *advanced_req, "open3d==0.16.1+c65c7ef"
+        ]
+    },
     include_package_data=True,
 )

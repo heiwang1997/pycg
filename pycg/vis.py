@@ -6,7 +6,7 @@ Please see the LICENSE file that should have been included as part of this packa
 
 import copy
 import numpy as np
-import open3d as o3d
+from pycg import o3d
 import matplotlib.colors
 import matplotlib.cm
 import math
