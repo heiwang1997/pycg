@@ -9,7 +9,7 @@ with open("pycg/__init__.py", "r") as fh:
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
-advanced_req = ["scipy", "screeninfo", "pillow"]
+advanced_req = ["scipy", "screeninfo", "pillow", "usd-core"]
 
 setup(
     name='python-pycg',
