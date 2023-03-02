@@ -72,20 +72,26 @@ def convert_from_pickable(geom_obj: dict):
     return geom
 
 
-def ensure_from_torch(arr, dim=2):
+def ensure_from_torch(arr, dim: int = 2, remove_batch_dim: bool = True):
     if hasattr(arr, "device"):
-        assert dim <= arr.ndim <= dim + 1, f"Torch tensor has dimension {arr.ndim} which is incorrect!"
-        if arr.ndim == dim + 1:
-            if arr.size(0) > 1:
-                print(f"Warning: input array is a torch tensor with batch dimension and batch size is {arr.size(0)}."
-                      f"We only retrieve the first batch.")
-            arr = arr[0]
+        if remove_batch_dim:
+            assert dim <= arr.ndim <= dim + 1, f"Torch tensor has dimension {arr.ndim} which is incorrect!"
+            if arr.ndim == dim + 1:
+                if arr.size(0) > 1:
+                    print(f"Warning: input array is a torch tensor with batch dimension and batch size is {arr.size(0)}."
+                          f"We only retrieve the first batch.")
+                arr = arr[0]
+        else:
+            assert arr.ndim == dim, f"Torch tensor has dimension {arr.ndim}, should be {dim}!"
         arr = arr.detach().cpu().numpy()
     elif isinstance(arr, list):
         arr = np.asarray(arr)
     assert isinstance(arr, np.ndarray)
-    if arr.ndim == dim - 1:
-        arr = arr[None, ...]
+    if remove_batch_dim:
+        if arr.ndim == dim - 1:
+            arr = arr[None, ...]
+    else:
+        assert arr.ndim == dim
     return arr
 
 
@@ -686,7 +692,7 @@ def pointcloud(pc, cid: np.ndarray = None, color: np.ndarray = None, ucid: int =
         if color is None:
             assert cfloat.shape[0] == pc.shape[0], f"Not match cfloat={cfloat.shape[0]}, pc={pc.shape[0]}"
             if cfloat_normalize:
-                cfloat_min, cfloat_max = cfloat.min(), cfloat.max()
+                cfloat_min, cfloat_max = np.nanmin(cfloat), np.nanmax(cfloat)
                 if cfloat_annotated:
                     cloud_annotation = [cfloat, cfloat_cmap]
                 print(f"cfloat normalize: min = {cfloat_min}, max = {cfloat_max}")
@@ -769,12 +775,30 @@ def colored_mesh(*args, **kwargs):
     return mesh(*args, **kwargs)
 
 
+def textured_mesh(mesh: Union[o3d.geometry.TriangleMesh, o3d.t.geometry.TriangleMesh],
+                  texture: np.ndarray = None):
+    if texture is None:
+        from pycg import image, get_assets_path
+        texture = image.read(get_assets_path() / "uv.png")
+
+    if isinstance(mesh, o3d.geometry.TriangleMesh):
+        mesh.textures = [o3d.geometry.Image(texture)]
+    else:
+        mesh.material.material_name = 'defaultLit'
+        mesh.material.texture_maps['albedo'] = o3d.t.geometry.Image(o3d.core.Tensor.from_numpy(texture))
+    return mesh
+
+
 def mesh(mesh_or_vertices: Union[np.ndarray, "torch.Tensor", o3d.geometry.TriangleMesh],
          triangles: Union[np.ndarray, "torch.Tensor"] = None,
          color: np.ndarray = None,
          cid: Union[np.ndarray, "torch.Tensor"] = None,
          ucid: int = None, cmap: str = 'tab10',
-         cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False):
+         cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False,
+         triangle_uvs: Union[np.ndarray, "torch.Tensor"] = None,
+         triangle_uv_inds: Union[np.ndarray, "torch.Tensor"] = None,
+         compute_vertex_normals: bool = True,
+         use_new_api: bool = False):
     if isinstance(mesh_or_vertices, o3d.geometry.TriangleMesh):
         assert triangles is None
         vertices = np.asarray(mesh_or_vertices.vertices).copy()
@@ -816,8 +840,30 @@ def mesh(mesh_or_vertices: Union[np.ndarray, "torch.Tensor", o3d.geometry.Triang
     if color is not None:
         mesh.vertex_colors = o3d.utility.Vector3dVector(color[:, :3])
 
+    if triangle_uvs is not None:
+        try:
+            triangle_uvs = ensure_from_torch(triangle_uvs, dim=3, remove_batch_dim=False)
+        except AssertionError:
+            triangle_uvs_packed = ensure_from_torch(triangle_uvs, dim=2, remove_batch_dim=False)
+            assert triangle_uv_inds is not None, "Has to provide triangle_uv_inds!"
+            triangle_uv_inds = ensure_from_torch(triangle_uv_inds, dim=2, remove_batch_dim=False)
+            assert triangle_uv_inds.shape[0] == len(mesh.triangles)
+            assert triangle_uv_inds.shape[1] == 3
+            triangle_uvs = triangle_uvs_packed[triangle_uv_inds.reshape(-1)].reshape(len(mesh.triangles), 3, 2)
+
+        assert triangle_uvs.shape[0] == len(mesh.triangles), f"{triangle_uvs.shape}"
+        assert triangle_uvs.shape[1] == 3
+        assert triangle_uvs.shape[2] == 2
+
+        mesh.triangle_uvs = o3d.utility.Vector2dVector(triangle_uvs.reshape((-1, 2)))
+        mesh.triangle_material_ids = o3d.utility.IntVector(np.zeros((len(mesh.triangles, )), dtype=np.int32))
+
+    if use_new_api:
+        mesh = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
+
     # if not mesh.has_vertex_normals():
-    mesh.compute_vertex_normals()
+    if compute_vertex_normals:
+        mesh.compute_vertex_normals()
     return mesh
 
 
@@ -1010,7 +1056,7 @@ def wireframe_bbox(extent_min=None, extent_max=None, solid=False, tube=False, tu
             [7, 1, 5], [3, 1, 7], [2, 6, 0], [0, 6, 4]
         ])
         cube_indices = (cube_indices[None, ...] + (np.arange(extent_min.shape[0]) * 8)[:, None, None]).reshape(-1, 3)
-        geom = colored_mesh(
+        geom = mesh(
             all_points, cube_indices,
             cid=np.repeat(cid[:, None], repeats=8, axis=1).flatten() if cid is not None else None,
             ucid=ucid, cmap=cmap,
@@ -1405,6 +1451,12 @@ def to_file(geom, path: str or Path):
     path = Path(path)
     if not path.parent.exists():
         path.parent.mkdir(parents=True)
+
+    if path.suffix.startswith('.usd'):
+        import pycg.render as render
+        scene = render.Scene().add_object(geom, name=path.stem)
+        return scene.export(path, geometry_only=True)
+
     if isinstance(geom, o3d.geometry.PointCloud):
         o3d.io.write_point_cloud(str(path), geom)
     elif isinstance(geom, o3d.geometry.TriangleMesh):

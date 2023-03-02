@@ -406,6 +406,13 @@ class Isometry:
 
     def __matmul__(self, other):
         # "@" operator: other can be (N,3) or (3,).
+        if hasattr(other, "transform"):
+            # Open3d stuff...
+            if hasattr(other, "to"):
+                other = other.clone()
+            else:
+                other = copy.deepcopy(other)
+            return other.transform(self.matrix)
         if hasattr(other, "device"):  # Torch tensor
             th_R, th_t = self.torch_matrices(other.device)
             if other.ndim == 2 and other.size(1) == 3:  # (N,3)
@@ -414,10 +421,6 @@ class Isometry:
                 return th_R @ other + th_t
             else:
                 raise NotImplementedError
-        if hasattr(other, "transform"):
-            # Open3d stuff...
-            other = copy.deepcopy(other)
-            return other.transform(self.matrix)
         if isinstance(other, Isometry) or isinstance(other, ScaledIsometry):
             return self.dot(other)
         if type(other) != np.ndarray or other.ndim == 1:

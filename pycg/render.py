@@ -333,11 +333,11 @@ class VisualizerManager:
     @staticmethod
     def convert_histogram(data):
         from scipy import stats
-        r_min = data.min()
-        r_max = data.max()
+        r_min = np.nanmin(data)
+        r_max = np.nanmax(data)
         pos = np.linspace(r_min, r_max, 200)
 
-        kernel = stats.gaussian_kde(data)
+        kernel = stats.gaussian_kde(data[np.isfinite(data)])
         return r_min, r_max, kernel(pos)
 
     def build_engines(self, use_new_api=False, key_bindings=None, max_cols=-1):
@@ -581,6 +581,20 @@ def render_scene_batches(scene_list, n_cols: int):
     return final_img
 
 
+def sanitize_usd_prim_path(origin_path: str):
+    path_comp = origin_path.split('/')
+    new_path_comp = []
+    for pc in path_comp:
+        if len(pc) > 0 and not pc[0].isalpha():
+            pc = 't' + pc
+        pc = pc.replace('-', '_')
+        new_path_comp.append(pc)
+    new_path = '/'.join(new_path_comp)
+    if new_path != origin_path:
+        logger.warning(f"Invalid USD prim path: {origin_path}, sanitized to {new_path}!")
+    return new_path
+
+
 class CameraIntrinsic:
     """
     A notice on Perspective/Orthogonal Projection.
@@ -693,6 +707,32 @@ class CameraIntrinsic:
                                self.cx * factor,
                                self.cy * factor)
 
+    def world_to_ndc(self, near: float = 0.01, far: float = 100.0):
+        perspective_mat = np.asarray([
+            [self.fx, 0,       -self.w / 2. + self.cx, 0.0],
+            [0.0,     self.fy, -self.h / 2. + self.cy, 0.0],
+            [0.0,     0.0,     0.0,                    1.0],       # Per Kaolin
+            [0.0,     0.0,     -1.0,                   0.0]
+        ])
+        U = -2.0 * near * far / (far - near)
+        V = -(far + near) / (far - near)
+        ndc_mat = np.asarray([
+            [2.0 / self.w, 0.0,          0.0, 0.0],
+            [0.0,          2.0 / self.h, 0.0, 0.0],
+            [0.0,          0.0,          U,   V],
+            [0.0,          0.0,          0.0, -1.0]
+        ])
+        return ndc_mat @ perspective_mat
+
+    def get_rays(self, normalized: bool = True):
+        xx, yy = np.meshgrid(np.arange(0, self.w) + 0.5, np.arange(0, self.h) + 0.5)
+        mg = np.concatenate((xx.reshape(1, -1), yy.reshape(1, -1)), axis=0)
+        mg_homo = np.vstack((mg, np.ones((1, mg.shape[1]))))
+        pc = np.matmul(self.inv_K, mg_homo)
+        if normalized:
+            pc /= np.linalg.norm(pc, axis=0)
+        return pc.T.reshape((self.w, self.h, 3))
+
 
 class SceneObject:
     USD_RAW_ATTR_NAME = "pycg_raw_attributes"
@@ -729,13 +769,15 @@ class SceneObject:
     def get_extent(self):
         # Note this is only a rough extent!
         bound_points = self.geom.get_axis_aligned_bounding_box().get_box_points()
-        bound_points = self.pose @ np.asarray(bound_points)
+        if hasattr(bound_points, "numpy"):
+            bound_points = bound_points.numpy()
+        else:
+            bound_points = np.asarray(bound_points)
+        bound_points = self.pose @ bound_points
         return np.min(bound_points, axis=0), np.max(bound_points, axis=0)
 
     def get_transformed(self):
-        transformed_geom = copy.deepcopy(self.geom)
-        transformed_geom.transform(self.pose.matrix)
-        return transformed_geom
+        return self.pose @ self.geom
 
     def get_filament_material(self, scene_shader, scene_point_size):
         mat = o3d.visualization.rendering.MaterialRecord()
@@ -793,6 +835,7 @@ class SceneObject:
         # https://raw.githubusercontent.com/NVIDIAGameWorks/kaolin/master/kaolin/io/usd.py
         from pxr import UsdGeom, UsdShade, Vt, Gf, Sdf
 
+        prim_path = sanitize_usd_prim_path(prim_path)
         if isinstance(self.geom, o3d.geometry.TriangleMesh):
             usd_mesh = UsdGeom.Mesh.Define(stage, prim_path)
             usd_mesh.AddTransformOp().Set(Gf.Matrix4d(self.pose.matrix.T))
@@ -917,6 +960,8 @@ class SceneLight:
     def add_usd_prim(self, stage, prim_path):
         from pxr import UsdLux, UsdGeom, Vt, Gf
 
+        prim_path = sanitize_usd_prim_path(prim_path)
+
         if self.type == 'POINT':
             usd_light = UsdLux.SphereLight.Define(stage, prim_path)
             usd_light.AddTransformOp().Set(Gf.Matrix4d(self.pose.matrix.T))
@@ -1017,7 +1062,7 @@ class Scene:
         else:
             raise FileNotFoundError
 
-    def export(self, path):
+    def export(self, path, geometry_only: bool = False):
         """
         Export using USD file.
             To render in omniverse
@@ -1025,13 +1070,13 @@ class Scene:
         """
         from pxr import Usd, UsdGeom, Vt, Gf, Sdf
 
-        if self.camera_intrinsic.w < self.camera_intrinsic.h:
+        if self.camera_intrinsic.w < self.camera_intrinsic.h and not geometry_only:
             print("Your camera is vertical. Rendering in omniverse may not re-create the same look."
                   "Consider rotate it by 90 degrees.")
             # Otherwise, when importing to OV, select '/camera/main' in the viewport, uncheck 'fit viewport',
             #   and manually change the resolution to desired ratio in `render movie' window.
 
-        stage = Usd.Stage.CreateNew(path)
+        stage = Usd.Stage.CreateNew(str(path))
         if self.up_axis == '+Y':
             UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
         else:
@@ -1043,22 +1088,24 @@ class Scene:
         for obj_name, obj in self.objects.items():
             obj.add_usd_prim(stage, f"/objects/{obj_name}")
 
-        # Setup camera
-        usd_relative_camera = Isometry.from_axis_angle('+X', degrees=180.0)
-        cam_base_xform = UsdGeom.Xform.Define(stage, "/camera_base")
-        cam_base_xform.AddTransformOp().Set(Gf.Matrix4d(self.camera_base.matrix.T))
-        cam_prim = UsdGeom.Camera.Define(stage, "/camera_base/relative_camera")
-        cam_prim.AddTransformOp().Set(Gf.Matrix4d(
-            (self.relative_camera_pose @ usd_relative_camera).matrix.T))
-        self.camera_intrinsic.set_usd_attributes(cam_prim)
+        if not geometry_only:
 
-        # Setup lights
-        for light_name, light in self.lights.items():
-            light.add_usd_prim(stage, f"/lights/{light_name}")
+            # Setup camera
+            usd_relative_camera = Isometry.from_axis_angle('+X', degrees=180.0)
+            cam_base_xform = UsdGeom.Xform.Define(stage, "/camera_base")
+            cam_base_xform.AddTransformOp().Set(Gf.Matrix4d(self.camera_base.matrix.T))
+            cam_prim = UsdGeom.Camera.Define(stage, "/camera_base/relative_camera")
+            cam_prim.AddTransformOp().Set(Gf.Matrix4d(
+                (self.relative_camera_pose @ usd_relative_camera).matrix.T))
+            self.camera_intrinsic.set_usd_attributes(cam_prim)
 
-        # Setup animations
-        if self.animator.is_enabled():
-            self.animator.export_usd(stage)
+            # Setup lights
+            for light_name, light in self.lights.items():
+                light.add_usd_prim(stage, f"/lights/{light_name}")
+
+            # Setup animations
+            if self.animator.is_enabled():
+                self.animator.export_usd(stage)
 
         stage.GetRootLayer().Save()
 
@@ -1282,6 +1329,8 @@ class Scene:
                              visible=visible)
         for mesh_name, mesh_obj in self.objects.items():
             geom = mesh_obj.get_transformed()
+            if hasattr(geom, "to_legacy"):
+                geom = geom.to_legacy()
             engine.add_geometry(geom)
             warpped_engine.displayed_geometries[mesh_name] = geom
         engine.get_view_control().convert_from_pinhole_camera_parameters(
@@ -1309,6 +1358,8 @@ class Scene:
                 old_geom = gl_engine.displayed_geometries[obj_uuid]
                 engine.remove_geometry(old_geom, reset_bounding_box=False)
                 geom = self.objects[obj_uuid].get_transformed()
+                if hasattr(geom, "to_legacy"):
+                    geom = geom.to_legacy()
                 engine.add_geometry(geom, reset_bounding_box=False)
                 gl_engine.displayed_geometries[obj_uuid] = geom
 
