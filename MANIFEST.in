@@ -1,0 +1,2 @@
+recursive-include pycg/assets/ *
+recursive-include pycg/blender_server/ *.py

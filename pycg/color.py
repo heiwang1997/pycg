@@ -72,11 +72,16 @@ def shuffle_custom_cmaps(seed: int = 0):
         cmap[:, ] = cmap[np.random.RandomState(seed).permutation(cmap.shape[0])]
 
 
-def map_quantized_color(cid: Union[int, np.ndarray], cmap: str = 'tab10'):
+def get_cmap_array(cmap: str):
     if cmap in ADDITIONAL_CMAPS.keys():
         color_map = ADDITIONAL_CMAPS[cmap]
     else:
         color_map = np.asarray(matplotlib.cm.get_cmap(cmap).colors)
+    return color_map
+
+
+def map_quantized_color(cid: Union[int, np.ndarray], cmap: str = 'tab10'):
+    color_map = get_cmap_array(cmap)
 
     single_value = False
     if isinstance(cid, int) or isinstance(cid, np.int64):

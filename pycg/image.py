@@ -188,6 +188,7 @@ def solid(img_w: int, img_h: int, color=None):
         color = (1.0, 1.0, 1.0, 1.0)
     if len(color) == 3:
         color = list(color) + [1.0]
+    color = [c / 255. if isinstance(c, int) else c for c in color]
     return np.full((img_h, img_w, 4), color)
 
 
@@ -419,6 +420,20 @@ def from_mplot(fig, close: bool = False):
     return image
 
 
+def color_palette(cmap_name: str):
+    from pycg import color
+    cmap_array = color.get_cmap_array(cmap_name)
+    palette_line = []
+    for cidx, color_value in enumerate(cmap_array):
+        line_img = hlayout_images([
+            text(str(cidx)), solid(50, 50, color_value),
+            text(f" {color_value[0]:.2f},{color_value[1]:.2f},{color_value[2]:.2f} | "),
+            text(str((color_value * 255).astype(np.uint8))),
+        ])
+        palette_line.append(line_img)
+    return composite_solid(vlayout_images(palette_line))
+
+
 def show(*imgs, reverse_rgb: bool = False, n_rows: int = 1, subfig_size: int = 3, shrink_batch_dim: bool = False):
     import matplotlib.pyplot as plt
 
@@ -457,6 +472,11 @@ def add_alpha_color(img: np.ndarray, alpha_color, tol: float = 2 / 255.):
     new_alpha = np.minimum(origin_alpha, new_alpha)
     img[:, :, 3] = new_alpha
     return img
+
+
+def composite_solid(img: np.ndarray):
+    img = ensure_float_image(img)
+    return alpha_compositing(img, solid(img.shape[1], img.shape[0]))
 
 
 def read(path):
