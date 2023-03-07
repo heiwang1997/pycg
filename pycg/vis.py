@@ -1015,12 +1015,15 @@ def wireframe_bbox(extent_min=None, extent_max=None, solid=False, tube=False, tu
 
     if cid is not None:
         cid = ensure_from_torch(cid, dim=1).astype(int)
+        ucid = None
 
     if cfloat is not None:
         cfloat = ensure_from_torch(cfloat, dim=1)
+        ucid = None
 
     if color is not None:
         color = ensure_from_torch(color)
+        ucid = None
 
     min_x, min_y, min_z = extent_min[:, 0], extent_min[:, 1], extent_min[:, 2]
     max_x, max_y, max_z = extent_max[:, 0], extent_max[:, 1], extent_max[:, 2]

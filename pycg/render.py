@@ -878,6 +878,14 @@ class SceneObject:
             UsdShade.MaterialBindingAPI(usd_mesh).Bind(mesh_material)
 
         elif isinstance(self.geom, o3d.geometry.PointCloud):
+            # xyz = np.asarray(self.geom.points)
+            # from tqdm import tqdm
+            # for idx, pts in enumerate(tqdm(xyz)):
+            #     # print(idx)
+            #     usd_pcd = UsdGeom.Sphere.Define(stage, prim_path + f"/s{idx}")
+            #     usd_pcd.AddTransformOp().Set(Gf.Matrix4d(Isometry(t=pts).matrix.T))
+            #     usd_pcd.GetRadiusAttr().Set(0.05)
+
             usd_pcd = UsdGeom.Points.Define(stage, prim_path)
             usd_pcd.AddTransformOp().Set(Gf.Matrix4d(self.pose.matrix.T))
             if self.geom.has_points():
