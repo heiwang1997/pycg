@@ -38,6 +38,7 @@ setup(
         "tqdm",
         "pynvml",
         "calmsize",
+        "rich",
     ],
     extras_require={
         "all": [

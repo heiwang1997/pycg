@@ -27,6 +27,8 @@ import weakref
 import functools
 import inspect
 import logging
+from rich.logging import RichHandler
+
 
 # if 'MEM_PROFILE' in os.environ.keys():
 #     from pytorch_memlab.line_profiler.profile import global_line_profiler
@@ -382,7 +384,8 @@ class AutoPdb:
         if isinstance(exc_val, bdb.BdbQuit):
             logger.info("Post mortem is skipped because the exception is from Pdb.")
         else:
-            traceback.print_exc()
+            # traceback.print_exc()
+            logger.exception("Exception caught by AutoPdb:")
             pdb.post_mortem(exc_tb)
         # if isinstance(exc_val, MisconfigurationException):
         #     if exc_val.__context__ is not None:
@@ -853,32 +856,34 @@ def lru_cache_class(*lru_args, **lru_kwargs):
     return decorator
 
 
-class CustomFormatter(logging.Formatter):
-
-    HEADER = f"{ConsoleColor.CYAN}%(asctime)s (%(filename)s:%(lineno)d){ConsoleColor.RESET} "
-    CONTENT = "[%(levelname)s] %(message)s "
-
-    FORMATS = {
-        logging.DEBUG: HEADER + ConsoleColor.RESET + CONTENT + ConsoleColor.RESET,
-        logging.INFO: HEADER + ConsoleColor.RESET + CONTENT + ConsoleColor.RESET,
-        logging.WARNING: HEADER + ConsoleColor.YELLOW + CONTENT + ConsoleColor.RESET,
-        logging.ERROR: HEADER + ConsoleColor.RED + CONTENT + ConsoleColor.RESET,
-        logging.CRITICAL: HEADER + ConsoleColor.BOLD + ConsoleColor.RED + CONTENT + ConsoleColor.RESET
-    }
-
-    def format(self, record):
-        log_fmt = self.FORMATS.get(record.levelno)
-        formatter = logging.Formatter(log_fmt, "%m-%d %H:%M:%S")
-        return formatter.format(record)
+# class CustomFormatter(logging.Formatter):
+#
+#     HEADER = f"{ConsoleColor.CYAN}%(asctime)s (%(filename)s:%(lineno)d){ConsoleColor.RESET} "
+#     CONTENT = "[%(levelname)s] %(message)s "
+#
+#     FORMATS = {
+#         logging.DEBUG: HEADER + ConsoleColor.RESET + CONTENT + ConsoleColor.RESET,
+#         logging.INFO: HEADER + ConsoleColor.RESET + CONTENT + ConsoleColor.RESET,
+#         logging.WARNING: HEADER + ConsoleColor.YELLOW + CONTENT + ConsoleColor.RESET,
+#         logging.ERROR: HEADER + ConsoleColor.RED + CONTENT + ConsoleColor.RESET,
+#         logging.CRITICAL: HEADER + ConsoleColor.BOLD + ConsoleColor.RED + CONTENT + ConsoleColor.RESET
+#     }
+#
+#     def format(self, record):
+#         log_fmt = self.FORMATS.get(record.levelno)
+#         formatter = logging.Formatter(log_fmt, "%m-%d %H:%M:%S")
+#         return formatter.format(record)
 
 
 # Global variable for application-wise logging.
 logger = logging.getLogger("pycg.exp")
 logger.setLevel(logging.DEBUG)
-__ch = logging.StreamHandler()
-__ch.setLevel(logging.DEBUG)
-__ch.setFormatter(CustomFormatter())
-logger.addHandler(__ch)
+logger.addHandler(RichHandler(markup=True, rich_tracebacks=True, log_time_format="[%m-%d %H:%M:%S]"))
+
+# __ch = logging.StreamHandler()
+# __ch.setLevel(logging.DEBUG)
+# __ch.setFormatter(CustomFormatter())
+# logger.addHandler(__ch)
 
 
 class GlobalManager:
