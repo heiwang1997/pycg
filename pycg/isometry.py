@@ -314,7 +314,16 @@ class Isometry:
 
     @staticmethod
     def random():
+        """ Fully random isometry (rotation covers full space) """
         return Isometry(q=Quaternion.random(), t=np.random.random((3,)))
+    
+    @staticmethod
+    def randn(sigma_degree: float = 0.0, sigma_t: float = 0.0):
+        rand_axis = np.random.randn(3)
+        rand_axis /= np.linalg.norm(rand_axis)
+        rand_angle = np.random.randn() * sigma_degree
+        rand_t = np.random.randn(3) * sigma_t
+        return Isometry.from_axis_angle(axis=rand_axis, degrees=rand_angle, t=rand_t)
 
     def inv(self):
         qinv = self.q.inverse
