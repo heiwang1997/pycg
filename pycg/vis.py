@@ -3,7 +3,6 @@ Copyright 2022 by Jiahui Huang. All rights reserved.
 This file is part of PyCG toolbox and is released under "MIT License Agreement".
 Please see the LICENSE file that should have been included as part of this package.
 """
-
 import copy
 import numpy as np
 from pycg import o3d
@@ -17,6 +16,30 @@ from pycg.exp import logger
 from pyquaternion import Quaternion
 from pathlib import Path
 from typing import List, Dict, Tuple, Union, Iterable
+
+
+try:
+    from multiprocessing import Process, Queue
+
+    # Get monitor size (for some reason, there's a segfault so I can only handle it this way...)
+    def get_monitor_size(q: Queue):
+        from screeninfo import get_monitors
+        q.put(get_monitors()[0])
+
+    queue = Queue()
+    p = Process(target=get_monitor_size, args=(queue, ),
+                daemon=True, stderr=None, stdout=None)
+    p.start()
+    p.join(timeout=0.5)
+    monitor_res = queue.get_nowait()
+
+    MONITOR_HEIGHT = monitor_res.height
+    MONITOR_WIDTH = monitor_res.width
+
+except Exception:
+
+    logger.warning("Failed to obtain monitor info!")
+    MONITOR_WIDTH = MONITOR_HEIGHT = None
 
 
 # Open3D Stuff
@@ -221,7 +244,7 @@ def layout_entities(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None
 def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout=None, margin=1.0,
             x_labels=None, y_labels=None, z_labels=None, show=True, use_new_api=False, group_names=None, cam_path=None,
             key_bindings=None, separate_windows=True, point_size=5.0, scale=1.0, default_camera_kwargs=None,
-            viewport_shading='LIT', auto_plane=False, up_axis="+Y"):
+            viewport_shading='LIT', auto_plane=False, up_axis="+Y", polyscope: bool = False):
     import pycg.render as render
 
     scenes = []
@@ -242,16 +265,14 @@ def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout
 
         if len(default_camera_kwargs) == 0:
             # Get monitor width so that we can fit in.
-            try:
-                from screeninfo import get_monitors
-                screen_width = get_monitors()[0].width
-                screen_height = get_monitors()[0].height - 128
+            if MONITOR_HEIGHT is not None and MONITOR_WIDTH is not None:
+                screen_width = MONITOR_WIDTH
+                screen_height = MONITOR_HEIGHT - 128
                 window_width = min(screen_width // layout_cols, 1024)
                 window_height = min(screen_height // layout_rows, 768)
                 default_camera_kwargs['w'] = int(window_width / scale)
                 default_camera_kwargs['h'] = int(window_height / scale)
-            except:
-                logger.warning("failed to obtain screen info. Is screeninfo package installed?")
+            else:
                 default_camera_kwargs = {'w': 1024, 'h': 768}
 
     else:
@@ -280,6 +301,7 @@ def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout
         scene_titles.append(gn[0] if gn is not None else None)
 
     if separate_windows and len(scenes) > 1:
+        assert not polyscope, "Polyscope is not supported for multiple windows."
         if show:
             render.vis_manager.reset()
             for scene, scene_title in zip(scenes, scene_titles):
@@ -296,9 +318,12 @@ def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout
     else:
         scene = scenes[0]
         if show:
-            scene.preview(title="View-Util 3D" if scene_titles[0] is None else scene_titles[0],
-                          allow_change_pose=cam_path is not None, add_ruler=False, use_new_api=use_new_api,
-                          key_bindings=key_bindings)
+            if polyscope:
+                scene.preview_polyscope()
+            else:
+                scene.preview(title="View-Util 3D" if scene_titles[0] is None else scene_titles[0],
+                            allow_change_pose=cam_path is not None, add_ruler=False, use_new_api=use_new_api,
+                            key_bindings=key_bindings)
         return scene
 
 
@@ -703,9 +728,9 @@ def pointcloud(pc, cid: np.ndarray = None, color: np.ndarray = None, ucid: int =
     if color is not None:
         color = ensure_from_torch(color)
         assert color.shape[0] == pc.shape[0], f"Point and color must have same size {color.shape[0]}, {pc.shape[0]}"
-        if color.dtype == np.uint8:
+        if issubclass(color.dtype.type, np.integer):
             color = color.astype(float) / 255.
-        point_cloud.colors = o3d.utility.Vector3dVector(color[:, :3])
+        point_cloud.colors = o3d.utility.Vector3dVector(color[:, :3].astype(float))
 
     if normal is not None:
         normal = ensure_from_torch(normal)
@@ -1360,6 +1385,7 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
         obj_components = trimesh.load(path)
 
         if isinstance(obj_components, trimesh.Trimesh):
+            print("OK?")
             geom = obj_components.as_open3d
         else:
             o3d_components = []
@@ -1368,7 +1394,7 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
                 o3d_mesh = o3d.geometry.TriangleMesh()
                 o3d_mesh.vertices = o3d.utility.Vector3dVector(np.asarray(comp_trimesh.vertices))
                 o3d_mesh.triangles = o3d.utility.Vector3iVector(np.asarray(comp_trimesh.faces))
-
+                import pdb; pdb.set_trace()
                 assert comp_trimesh.visual.kind == 'texture'
                 if comp_trimesh.visual.uv is not None:
                     tri_uv = comp_trimesh.visual.uv[comp_trimesh.faces.ravel()]

@@ -1497,6 +1497,16 @@ class Scene:
         vis_manager.add_scene(self, title, self.record_camera_pose if allow_change_pose else None)
         vis_manager.run(use_new_api=use_new_api, key_bindings=key_bindings)
         return self
+    
+    def preview_polyscope(self):
+        import polyscope as ps
+        ps.init()
+        for obj_name, obj in self.objects.items():
+            if isinstance(obj, o3d.geometry.PointCloud):
+                ps_pcd = ps.register_point_cloud(obj_name, np.asarray(obj.points))
+                if obj.has_color():
+                    ps_pcd.add_color_quantity("color", np.asarray(obj.colors))
+        ps.show()
 
     def _setup_blender_static(self):
         # Set-up the static contents of the scene
