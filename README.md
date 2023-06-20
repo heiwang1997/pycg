@@ -47,12 +47,12 @@ Please refer to the individual documentation of each submodule to get started.
 
 ## Gallery
 
-![](demo/render.png)
+![](docs/demo/render.png)
 
-<video src="docs/demo/scene_show.mp4" controls autoplay></video>
+<video src="raw/master/docs/demo/scene_show.mp4" controls autoplay></video>
 
-<video src="docs/demo/selection.mp4" controls autoplay></video>
+<video src="raw/master/docs/demo/selection.mp4" controls autoplay></video>
 
-<video src="docs/demo/animation_light.mp4" controls autoplay></video>
+<video src="raw/master/docs/demo/animation_light.mp4" controls autoplay></video>
 
-<video src="docs/demo/animation_arrow.mp4" controls autoplay></video>
+<video src="raw/master/docs/demo/animation_arrow.mp4" controls autoplay></video>
