@@ -1,7 +1,7 @@
 from pycg.exp import logger
 
 OPTION_1 = "(recommended, using customized Open3D that enables view sync, animation, ...) \n\n" \
-           "pip install python-pycg[full] -f https://pycg.s3.ap-northeast-1.amazonaws.com/packages/index.html\n\n"
+           "pip install python-pycg[full] -f https://pycg.huangjh.tech/packages/index.html\n\n"
 OPTION_2 = "(using official Open3D) \n\npip install python-pycg[all]\n\n"
 
 try:
