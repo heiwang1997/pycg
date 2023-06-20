@@ -49,10 +49,10 @@ Please refer to the individual documentation of each submodule to get started.
 
 ![](docs/demo/render.png)
 
-<video src="raw/master/docs/demo/scene_show.mp4" controls autoplay></video>
+<video src="https://github.com/heiwang1997/pycg/raw/master/docs/demo/scene_show.mp4" controls autoplay></video>
 
-<video src="raw/master/docs/demo/selection.mp4" controls autoplay></video>
+<video src="https://github.com/heiwang1997/pycg/raw/master/docs/demo/selection.mp4" controls autoplay></video>
 
-<video src="raw/master/docs/demo/animation_light.mp4" controls autoplay></video>
+<video src="https://github.com/heiwang1997/pycg/raw/master/docs/demo/animation_light.mp4" controls autoplay></video>
 
-<video src="raw/master/docs/demo/animation_arrow.mp4" controls autoplay></video>
+<video src="https://github.com/heiwang1997/pycg/raw/master/docs/demo/animation_arrow.mp4" controls autoplay></video>
