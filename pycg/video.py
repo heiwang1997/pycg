@@ -16,7 +16,7 @@ def make_video(input_format: str, output_path: str, fps: int):
     os.system(f"ffmpeg -r {fps} -i {input_format} -crf 25 -pix_fmt yuv420p {output_path}")
 
 
-def make_video_xw264(input_format: str, output_path: str, fps: int, crf: float = 23.5):
+def make_video_xw264(input_format: str, output_path: str, fps: int = None, crf: float = 23.5):
     """
     Call the x264 program with a best set of parameters found by Maruto-toolbox.
         Note that this does not support audio yet!
@@ -41,7 +41,8 @@ def make_video_xw264(input_format: str, output_path: str, fps: int, crf: float =
     for i_files in input_files:
         i_files = Path(i_files)
         i_fname = i_files.stem
-        i_idx = int(''.join(c for c in i_fname if c.isdigit()))
+        i_digit_str = ''.join(c for c in i_fname if c.isdigit())
+        i_idx = int(i_digit_str) if len(i_digit_str) > 0 else -1
         input_named_files.append([i_files, i_idx])
 
     # Sort file according to extracted indices
@@ -53,10 +54,19 @@ def make_video_xw264(input_format: str, output_path: str, fps: int, crf: float =
     if len(missing_indices) > 0:
         print(f"Missing {len(missing_indices)} of {len(full_indices)} files.")
 
+    XW_ARGS = "--preset 8 -I 250 -r 4 -b 3 --me umh -i 1 --scenecut 60 -f 1:1 --qcomp 0.5 " + \
+              "--psy-rd 0.3:0 --aq-mode 2 --aq-strength 0.8"
+
+    if len(input_named_files) == 1:
+        os.system(f"x264 --crf {crf:.1f} " + XW_ARGS + \
+                  (f" --fps {fps}" if fps is not None else "") + \
+                  f" -o {output_path} {input_named_files[0][0]}")
+        return
+
     # Copy to temp location.
     with tempfile.TemporaryDirectory() as video_tmp_dir:
         for idx, (fname, _) in enumerate(tqdm.tqdm(input_named_files)):
             shutil.copy(fname, Path(video_tmp_dir) / f"{idx:06d}.png")
-        os.system(f"x264 --crf {crf:.1f} --fps {fps} --preset 8 -I 250 -r 4 -b 3 --me umh "
-                  "-i 1 --scenecut 60 -f 1:1 --qcomp 0.5 --psy-rd 0.3:0 --aq-mode 2 --aq-strength 0.8 "
-                  f"-o {output_path} {video_tmp_dir}/%06d.png")
+        assert fps is not None
+        os.system(f"x264 --crf {crf:.1f} --fps {fps} " + XW_ARGS +
+                  f" -o {output_path} {video_tmp_dir}/%06d.png")

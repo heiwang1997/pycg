@@ -42,10 +42,10 @@ setup(
     ],
     extras_require={
         "all": [
-            *advanced_req, "open3d"
+            *advanced_req, "open3d-cpu>=0.17.0"
         ],
         "full": [
-            *advanced_req, "open3d==0.16.1+c65c7ef"
+            *advanced_req, "open3d-cpu==0.17.0+0c29de37f"
         ]
     },
     include_package_data=True,
