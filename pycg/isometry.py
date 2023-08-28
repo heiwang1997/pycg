@@ -205,6 +205,7 @@ class Isometry:
             assert mat.shape == (4, 4) or mat.shape == (3, 4)
             rot_mat = mat[:3, :3]
             if ortho:
+                rot_mat = rot_mat.astype(float)
                 rot_mat = project_orthogonal(rot_mat)
             else:
                 rot_scale = np.diag(rot_mat.T @ rot_mat)
@@ -421,6 +422,10 @@ class Isometry:
                 other = other.clone()
             else:
                 other = copy.deepcopy(other)
+            if "OrientedBoundingBox" in str(type(other)):
+                other = other.rotate(self.q.rotation_matrix, center=np.zeros((3, 1)))
+                other.translate(self.t)
+                return other
             return other.transform(self.matrix)
         if hasattr(other, "device"):  # Torch tensor
             th_R, th_t = self.torch_matrices(other.device)
@@ -520,6 +525,36 @@ class ScaledIsometry:
         else:
             res = self.iso @ other
             return self.s * res
+
+
+class BoundingBox:
+
+    VERT_SEQ = np.array([
+        [-0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, -0.5], [-0.5, 0.5, 0.5],
+        [0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5]
+    ])
+
+    def __init__(self, iso: Isometry = None, extent: np.ndarray = None) -> None:
+        if iso is None:
+            iso = Isometry()
+        if extent is None:
+            extent = np.ones((3,))
+        self.iso = iso
+        self.extent = np.asarray(extent)
+
+    @property
+    def vertices(self):
+        return self.iso @ (self.VERT_SEQ * self.extent[np.newaxis, :])
+    
+    def __repr__(self):
+        return f"BoundingBox: iso = {self.iso}, extent = {self.extent}"
+    
+    def inside(self, pos: np.ndarray):
+        pos = np.asarray(pos)
+        return np.all(np.abs(self.iso.inv() @ pos) <= self.extent / 2.0, axis=-1)
+    
+    def scaled(self, factor: float):
+        return BoundingBox(iso=self.iso, extent=self.extent * factor)
 
 
 def _isometry_dot(left, right):

@@ -10,7 +10,7 @@ import matplotlib.colors
 import matplotlib.cm
 import math
 
-from pycg.isometry import Isometry
+from pycg.isometry import Isometry, BoundingBox
 from pycg.color import map_quantized_color
 from pycg.exp import logger
 from pyquaternion import Quaternion
@@ -1014,29 +1014,45 @@ def wireframe(mesh: o3d.geometry.TriangleMesh):
     return geom
 
 
-def wireframe_bbox(extent_min=None, extent_max=None, solid=False, tube=False, tube_radius=0.001,
+def wireframe_bbox(extent_min=None, extent_max=None, 
+                   bbox: BoundingBox = None,
+                   solid=False, tube=False, tube_radius=0.001,
                    cid: Union[np.ndarray, "torch.Tensor"] = None,
                    ucid: int = 0, cmap: str = 'tab10',
                    cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False,
                    color: Union[np.ndarray, "torch.Tensor"] = None):
-    if extent_min is None:
-        extent_min = [0.0, 0.0, 0.0]
-    if extent_max is None:
-        extent_max = [1.0, 1.0, 1.0]
+    
+    if bbox is None:
+        if extent_min is None:
+            extent_min = [0.0, 0.0, 0.0]
+        if extent_max is None:
+            extent_max = [1.0, 1.0, 1.0]
 
-    if isinstance(extent_min, list):
-        extent_min = np.array(extent_min)
-    if isinstance(extent_max, list):
-        extent_max = np.array(extent_max)
+        if isinstance(extent_min, list):
+            extent_min = np.array(extent_min)
+        if isinstance(extent_max, list):
+            extent_max = np.array(extent_max)
 
-    # Ensure (N, 3) numpy arrays
-    if not isinstance(extent_max[0], Iterable):
-        extent_max = extent_max[None, :]
-    if not isinstance(extent_min[0], Iterable):
-        extent_min = extent_min[None, :]
-    extent_min = ensure_from_torch(extent_min, 2)
-    extent_max = ensure_from_torch(extent_max, 2)
-    assert extent_min.shape[0] == extent_max.shape[0]
+        # Ensure (N, 3) numpy arrays
+        if not isinstance(extent_max[0], Iterable):
+            extent_max = extent_max[None, :]
+        if not isinstance(extent_min[0], Iterable):
+            extent_min = extent_min[None, :]
+        extent_min = ensure_from_torch(extent_min, 2)
+        extent_max = ensure_from_torch(extent_max, 2)
+        assert extent_min.shape[0] == extent_max.shape[0]
+
+        min_x, min_y, min_z = extent_min[:, 0], extent_min[:, 1], extent_min[:, 2]
+        max_x, max_y, max_z = extent_max[:, 0], extent_max[:, 1], extent_max[:, 2]
+        all_points = np.stack([
+            min_x, min_y, min_z, min_x, min_y, max_z, min_x, max_y, min_z, min_x, max_y, max_z,
+            max_x, min_y, min_z, max_x, min_y, max_z, max_x, max_y, min_z, max_x, max_y, max_z
+        ], axis=1).reshape(-1, 3)
+        n_box = extent_min.shape[0]
+
+    else:
+        all_points = bbox.vertices
+        n_box = 1
 
     if cid is not None:
         cid = ensure_from_torch(cid, dim=1).astype(int)
@@ -1050,20 +1066,13 @@ def wireframe_bbox(extent_min=None, extent_max=None, solid=False, tube=False, tu
         color = ensure_from_torch(color)
         ucid = None
 
-    min_x, min_y, min_z = extent_min[:, 0], extent_min[:, 1], extent_min[:, 2]
-    max_x, max_y, max_z = extent_max[:, 0], extent_max[:, 1], extent_max[:, 2]
-    all_points = np.stack([
-        min_x, min_y, min_z, min_x, min_y, max_z, min_x, max_y, min_z, min_x, max_y, max_z,
-        max_x, min_y, min_z, max_x, min_y, max_z, max_x, max_y, min_z, max_x, max_y, max_z
-    ], axis=1).reshape(-1, 3)
-
     if not solid:
         line_indices = np.asarray([
             [0, 1], [2, 3], [4, 5], [6, 7],
             [0, 4], [1, 5], [2, 6], [3, 7],
             [0, 2], [4, 6], [1, 3], [5, 7]
         ])
-        line_indices = (line_indices[None, ...] + (np.arange(extent_min.shape[0]) * 8)[:, None, None]).reshape(-1, 2)
+        line_indices = (line_indices[None, ...] + (np.arange(n_box) * 8)[:, None, None]).reshape(-1, 2)
         geom = lineset(
             all_points, line_indices,
             cid=np.repeat(cid[:, None], repeats=12, axis=1).flatten() if cid is not None else None,
@@ -1083,7 +1092,7 @@ def wireframe_bbox(extent_min=None, extent_max=None, solid=False, tube=False, tu
             [2, 7, 6], [2, 3, 7], [0, 3, 2], [0, 1, 3],
             [7, 1, 5], [3, 1, 7], [2, 6, 0], [0, 6, 4]
         ])
-        cube_indices = (cube_indices[None, ...] + (np.arange(extent_min.shape[0]) * 8)[:, None, None]).reshape(-1, 3)
+        cube_indices = (cube_indices[None, ...] + (np.arange(n_box) * 8)[:, None, None]).reshape(-1, 3)
         geom = mesh(
             all_points, cube_indices,
             cid=np.repeat(cid[:, None], repeats=8, axis=1).flatten() if cid is not None else None,

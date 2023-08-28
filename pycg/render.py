@@ -768,6 +768,10 @@ class SceneObject:
 
     def get_extent(self):
         # Note this is only a rough extent!
+        if 'text_pos' in self.attributes:
+            ps = np.asarray(self.attributes['text_pos'])
+            return ps, ps + 0.01
+            
         bound_points = self.geom.get_axis_aligned_bounding_box().get_box_points()
         if hasattr(bound_points, "numpy"):
             bound_points = bound_points.numpy()
@@ -1000,7 +1004,6 @@ class Scene:
     def __init__(self, cam_path: str = None, up_axis: str = '+Y'):
         self.objects = {}
         self.lights = {}
-        self.output = ["rgb"]
 
         self.cached_pyrenderer = None
         self.selection_sets = []
@@ -1325,6 +1328,12 @@ class Scene:
             obj.pose.t -= center
         return self
 
+    def _build_raycasting_scene(self):
+        scene = o3d.t.geometry.RaycastingScene()
+        for obj in self.objects.values():
+            scene.add_triangles(obj.geom)
+        return scene
+
     def _build_gl_engine(self, window_name, visible, pos=None):
         if pos is None:
             pos = (50, 50)
@@ -1406,7 +1415,8 @@ class Scene:
         for mesh_name, mesh_obj in self.objects.items():
             mat = mesh_obj.get_filament_material(self.viewport_shading, int(self.point_size))
             if "text" in mesh_obj.attributes:
-                sv.add_3d_label(mesh_obj.pose @ mesh_obj.attributes["text_pos"], mesh_obj.attributes["text"])
+                if visualizer is not None:
+                    sv.add_3d_label(mesh_obj.pose @ mesh_obj.attributes["text_pos"], mesh_obj.attributes["text"])
             else:
                 # Origin is mesh_obj.get_transformed()
                 sv.add_geometry(mesh_name, mesh_obj.geom, mat)
@@ -1577,6 +1587,33 @@ class Scene:
                 blender.send_render(quality=quality, save_path=str(render_tmp_file))
                 rgb_img = image.read(render_tmp_file)
             yield t_cur, rgb_img
+
+    def render_opengl_depth(self):
+        gl_engine = self._build_gl_engine("_", False)
+        engine = gl_engine.engine
+        engine.poll_events()
+        engine.update_renderer()
+        captured_depth = engine.capture_depth_float_buffer(do_render=True)
+        engine.destroy_window()
+        return np.asarray(captured_depth)
+    
+    def render_opengl_depth_animation(self):
+        gl_engine = self._build_gl_engine("_", False)
+        engine = gl_engine.engine
+
+        t_start, t_end = self.animator.get_range()
+        for t_cur in range(t_start, t_end + 1):
+            self.animator.set_frame(t_cur)
+            self._update_gl_engine(gl_engine)
+            engine.poll_events()
+            engine.update_renderer()
+            captured_depth = np.asarray(engine.capture_depth_float_buffer(do_render=True))
+            yield t_cur, captured_depth
+
+        engine.destroy_window()
+
+    def render_raycasting_depth(self):
+        raise NotImplementedError
 
     def render_opengl(self, multisample: int = 1, need_alpha=False, save_path: str = None):
         saved_intrinsic = copy.copy(self.camera_intrinsic)
