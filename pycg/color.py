@@ -113,10 +113,28 @@ def shuffle_custom_cmaps(seed: int = 0):
 
 
 def get_cmap_array(cmap: str):
+    if "@" in cmap:
+        cmap, cmap_processor = cmap.split("@")
+    else:
+        cmap, cmap_processor = cmap, None
+
     if cmap in ADDITIONAL_CMAPS.keys():
         color_map = ADDITIONAL_CMAPS[cmap]
     else:
         color_map = np.asarray(matplotlib.cm.get_cmap(cmap).colors)
+
+    if cmap_processor is not None:
+        if cmap_processor == "shuffle":
+            color_map = color_map[np.random.RandomState(0).permutation(color_map.shape[0])]
+        elif cmap_processor == "double-lighter":
+            lighter_map = 0.5 * color_map + 0.5 * np.ones_like(color_map)
+            color_map = np.hstack([color_map, lighter_map]).reshape((-1, 3))
+        elif cmap_processor == "double-darker":
+            darker_map = 0.7 * color_map
+            color_map = np.hstack([color_map, darker_map]).reshape((-1, 3))
+        else:
+            raise NotImplementedError("Unknown cmap processor: {}".format(cmap_processor))
+
     return color_map
 
 

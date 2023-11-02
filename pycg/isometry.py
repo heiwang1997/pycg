@@ -343,6 +343,10 @@ class Isometry:
             up = np.asarray(up)
 
         z_dir = target - source
+        if np.linalg.norm(z_dir) < 1e-6:
+            logger.warning(f"source {source} and target {target} are too close, use default z_dir.")
+            z_dir = np.asarray([0.0, 0.0, 1.0])
+
         z_dir /= np.linalg.norm(z_dir)
         if up is None:
             up = np.asarray([0.0, 1.0, 0.0])

@@ -1802,6 +1802,41 @@ class ThemeAngela(BaseTheme):
         scene.additional_blender_commands = "bpy.data.scenes[0].view_settings.view_transform = 'Standard'"
 
 
+class ThemeNormalShadow(BaseTheme):
+    def __init__(self, smooth_shading: bool = False,
+                 sun_tilt_right: float = 0.0, sun_tilt_back: float = 0.0,
+                 sun_energy: float = 1.5, sun_angle: float = 20.0,
+                 normal_saturation: float = 1.5):
+        super().__init__('''
+        Normal rendering with shadow casted (for blender).
+        ''')
+        self.smooth_shading = smooth_shading
+        self.sun_tilt_right = sun_tilt_right
+        self.sun_tilt_back = sun_tilt_back
+        self.sun_energy = sun_energy
+        self.sun_angle = sun_angle
+        self.normal_saturation = normal_saturation  # blender default is 1.0
+
+    def apply_to(self, scene: Scene):
+        scene.lights.clear()
+        scene.film_transparent = True
+        scene.viewport_shading = 'LIT'
+        scene.remove_object('auto_plane', non_exist_ok=True)
+        scene.env_map = None
+        for o in scene.objects.values():
+            o.attributes['smooth_shading'] = self.smooth_shading
+            o.attributes['material.ao'] = {"on": False}
+            o.attributes['material.normal'] = {"on": True, "saturation": self.normal_saturation}
+        scene.auto_plane(dist_ratio=0.0)
+        scene.objects['auto_plane'].attributes['cycles.is_shadow_catcher'] = True
+        scene.ambient_color = (1.0, 1.0, 1.0, 0.6)
+
+        light_iso = self.determine_sun_iso(scene, self.sun_tilt_back, self.sun_tilt_right)
+        scene.add_light_sun(
+            light_dir=light_iso.q.q, light_energy=self.sun_energy, angle=self.sun_angle / 180.0 * np.pi)
+        scene.additional_blender_commands = "bpy.data.scenes[0].view_settings.view_transform = 'Standard'"
+
+
 class ThemeDiffuseShadow(BaseTheme):
     def __init__(self, base_color=None, smooth_shading: bool = False,
                  sun_tilt_right: float = 0.0, sun_tilt_back: float = 0.0,

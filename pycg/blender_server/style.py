@@ -73,11 +73,15 @@ def set_origin_material(uuidx):
             normal_t_node1 = nodes.new(type='ShaderNodeVectorMath')
             normal_t_node1.operation = 'ADD'
             normal_t_node1.inputs[1].default_value = (1.0, 1.0, 1.0)
-            input_color_node = nodes.new(type='ShaderNodeVectorMath')
-            input_color_node.operation = 'MULTIPLY'
-            input_color_node.inputs[1].default_value = (0.5, 0.5, 0.5)
+            normal_t_node2 = nodes.new(type='ShaderNodeVectorMath')
+            normal_t_node2.operation = 'MULTIPLY'
+            normal_t_node2.inputs[1].default_value = (0.5, 0.5, 0.5)
+            hue_sat_node = nodes.new(type='ShaderNodeHueSaturation')
+            hue_sat_node.inputs[1].default_value = normal_attr.get("saturation", 1.0)
             mat.node_tree.links.new(input_normal_node.outputs[0], normal_t_node1.inputs[0])
-            mat.node_tree.links.new(normal_t_node1.outputs[0], input_color_node.inputs[0])
+            mat.node_tree.links.new(normal_t_node1.outputs[0], normal_t_node2.inputs[0])
+            mat.node_tree.links.new(normal_t_node2.outputs[0], hue_sat_node.inputs[4])
+            input_color_node = hue_sat_node
         elif len(AssetManager.data[uuidx].textures) > 0:
             input_color_node = nodes.new(type='ShaderNodeTexImage')
             mat.node_tree.links.new(input_uv_node.outputs[0], input_color_node.inputs[0])

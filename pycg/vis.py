@@ -1394,7 +1394,6 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
         obj_components = trimesh.load(path)
 
         if isinstance(obj_components, trimesh.Trimesh):
-            print("OK?")
             geom = obj_components.as_open3d
         else:
             o3d_components = []

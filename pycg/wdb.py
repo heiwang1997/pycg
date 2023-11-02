@@ -16,7 +16,7 @@ def _rebuild_cfg(d):
     elif isinstance(d, str):
         if d == 'None':
             return None
-        elif d[0] == '{':
+        elif len(d) > 0 and d[0] == '{':
             # Deeper keys are collapsed. We need to rescue them:
             return eval(d)
         return d

@@ -100,7 +100,7 @@ def auto_crop(img: np.ndarray, bound_color=None, tol: float = 2 / 255., enlarge:
             color_img[:2].reshape(-1, 3), color_img[-2:].reshape(-1, 3),
             color_img[:, :2].reshape(-1, 3), color_img[:, -2:].reshape(-1, 3)
         ], axis=0)
-        bound_color = scipy.stats.mode(bound_samples, axis=0).mode[0]
+        bound_color = scipy.stats.mode(bound_samples, axis=0).mode
     else:
         if isinstance(bound_color[0], int) or isinstance(bound_color[0], np.uint8):
             bound_color = [t / 255. for t in bound_color]
@@ -282,7 +282,7 @@ def text(text, font='DejaVuSansMono.ttf', font_size=16, max_width=None):
 
     # Get character width and determine text-warps
     if max_width is not None:
-        c_width = font_obj.getsize('ABC')[0] // 3
+        c_width = font_obj.getbbox('ABC')[2] // 3
         max_characters = math.floor(max_width / c_width)
         text = textwrap.wrap(text, width=max_characters)
 
@@ -292,16 +292,16 @@ def text(text, font='DejaVuSansMono.ttf', font_size=16, max_width=None):
     # Determine real dimensions:
     font_w, font_h = 0, 0
     for line_text in text:
-        font_dim = font_obj.getsize(line_text)
-        font_h += font_dim[1]
-        font_w = max(font_w, font_dim[0])
+        font_dim = font_obj.getbbox(line_text)
+        font_h += font_dim[3]
+        font_w = max(font_w, font_dim[2])
 
     img = Image.new('RGB', (font_w, font_h), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     line_h = 0
     for line_text in text:
         draw.text((0, line_h), line_text, font=font_obj, fill=(0, 0, 0))
-        line_h += font_obj.getsize(line_text)[1]
+        line_h += font_obj.getbbox(line_text)[3]
 
     img = np.asarray(img)
     return img
