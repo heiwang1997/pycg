@@ -833,6 +833,13 @@ class SceneObject:
         if "uniform_color" in self.attributes:
             mat.base_color = self.attributes["uniform_color"]
 
+        if len(self.geom.textures) == 1:
+            tex_img = np.asarray(self.geom.textures[0])[::-1]
+            tex_img = np.ascontiguousarray(tex_img)
+            mat.albedo_img = o3d.geometry.Image(tex_img)
+        elif len(self.geom.textures) > 1:
+            logger.warning(f"More than one texture found for {self.geom}, texture will not be displayed.")
+
         return mat
 
     def add_usd_prim(self, stage, prim_path):

@@ -1358,7 +1358,8 @@ def colored_triangle_soup(mesh: o3d.geometry.TriangleMesh, color: np.ndarray):
     return soup
 
 
-def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures: bool = False):
+def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures: bool = True,
+              multipart_force_merge: bool = True):
     if not isinstance(path, Path):
         path = Path(path)
     if not path.exists():
@@ -1378,7 +1379,7 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
     elif suffix in [".stl", ".off", ".gltf"]:
         # In the future: load PBR material in gltf to render in filament
         geom = o3d.io.read_triangle_mesh(str(path))
-    elif suffix == ".obj":
+    elif suffix in [".obj", ".glb"]:
         """
         Open3D loader does not support materials and textures very well, with the following limitations:
             1. kd is not loaded.
@@ -1391,19 +1392,21 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
         texture image.
         """
         import trimesh
-        obj_components = trimesh.load(path)
+        obj_components = trimesh.load(path, force="mesh" if multipart_force_merge else None)
 
         if isinstance(obj_components, trimesh.Trimesh):
-            geom = obj_components.as_open3d
+            all_components = [obj_components]
         else:
-            o3d_components = []
-            tex_coord_warning = False
-            for comp_name, comp_trimesh in obj_components.geometry.items():
-                o3d_mesh = o3d.geometry.TriangleMesh()
-                o3d_mesh.vertices = o3d.utility.Vector3dVector(np.asarray(comp_trimesh.vertices))
-                o3d_mesh.triangles = o3d.utility.Vector3iVector(np.asarray(comp_trimesh.faces))
-                import pdb; pdb.set_trace()
-                assert comp_trimesh.visual.kind == 'texture'
+            all_components = obj_components.geometry.values()
+
+        o3d_components = []
+        tex_coord_warning = False
+        for comp_trimesh in all_components:
+            o3d_mesh = o3d.geometry.TriangleMesh()
+            o3d_mesh.vertices = o3d.utility.Vector3dVector(np.asarray(comp_trimesh.vertices))
+            o3d_mesh.triangles = o3d.utility.Vector3iVector(np.asarray(comp_trimesh.faces))
+
+            if comp_trimesh.visual.kind == 'texture':
                 if comp_trimesh.visual.uv is not None:
                     tri_uv = comp_trimesh.visual.uv[comp_trimesh.faces.ravel()]
                     if not np.all(tri_uv >= 0.0) or not np.all(tri_uv <= 1.0):
@@ -1413,11 +1416,17 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
                     tri_uv = tri_uv % 1.0
                     o3d_mesh.triangle_uvs = o3d.utility.Vector2dVector(tri_uv)
 
-                tex_img = comp_trimesh.visual.material.image
+                material = comp_trimesh.visual.material
+                if isinstance(material, trimesh.visual.material.PBRMaterial):
+                    tex_img = np.asarray(material.baseColorTexture)
+                else:
+                    tex_img = material.image
                 kd_multiplier = None
                 if tex_img is not None:
                     tex_img = np.asarray(tex_img)
                     if load_obj_textures:
+                        # Test pass for PNG textures.
+                        tex_img = np.ascontiguousarray(np.flip(tex_img, axis=0))
                         o3d_mesh.textures = [o3d.geometry.Image(tex_img)]
                         o3d_mesh.triangle_material_ids = o3d.utility.IntVector(
                             np.zeros((len(o3d_mesh.triangles, )), dtype=np.int32))
@@ -1428,18 +1437,23 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
                             # Get rid of some strange 2-channel textures.
                             kd_multiplier = None
 
-                # Always set v-color
-                kd_color = comp_trimesh.visual.material.diffuse[:3].astype(float)[None, :] / 255.
-                if kd_multiplier is not None:
-                    kd_color = kd_color * kd_multiplier[None, :]
-                o3d_mesh.vertex_colors = o3d.utility.Vector3dVector(np.repeat(kd_color, len(o3d_mesh.vertices), axis=0))
+                if hasattr(material, "diffuse"):
+                    # Always set v-color
+                    kd_color = material.diffuse[:3].astype(float)[None, :] / 255.
+                    if kd_multiplier is not None:
+                        kd_color = kd_color * kd_multiplier[None, :]
+                    o3d_mesh.vertex_colors = o3d.utility.Vector3dVector(
+                        np.repeat(kd_color, len(o3d_mesh.vertices), axis=0))
 
-                o3d_components.append(o3d_mesh)
-
-            if load_obj_textures:
-                geom = o3d_components
             else:
-                geom = merged_entities(o3d_components)[0]
+                logger.warning(f"Unsupported material type {type(comp_trimesh.visual)}!")
+
+            o3d_components.append(o3d_mesh)
+
+        if load_obj_textures:
+            geom = o3d_components[0] if len(o3d_components) == 1 else o3d_components
+        else:
+            geom = merged_entities(o3d_components)[0]
 
     elif suffix == ".ply":
         from plyfile import PlyData, PlyElement

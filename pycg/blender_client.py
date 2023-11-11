@@ -142,6 +142,11 @@ def send_entity(geom, uuidx: str = None, pose: Isometry = None, attributes=None)
             t = np.asarray(t)
             if t.dtype == np.uint8:
                 t = t.astype(np.float16) / 255.
+            else:
+                logger.warning(f"Texture data type {t.dtype} is not uint8, texture might be wrong")
+            if t.shape[2] == 3:
+                t = np.pad(t, ((0, 0), (0, 0), (0, 1)), mode='constant', constant_values=1.0)
+            assert t.shape[2] == 4
             textures.append(t)
         info_dict.update({
             'geometry_type': 'MESH',
