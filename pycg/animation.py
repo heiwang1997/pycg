@@ -12,6 +12,7 @@ from copy import deepcopy
 from pycg.isometry import Isometry, Quaternion
 from pycg import blender_client as blender
 from collections import defaultdict
+from typing import Union, List, Dict, Mapping, Any, Optional, Tuple
 
 
 """
@@ -418,6 +419,30 @@ class AnimatorBase:
         raise NotImplementedError
 
 
+class ScalarAnimator(AnimatorBase):
+    def __init__(self, interp_type: InterpType, blender_attribute: str = "scale", blender_attribute_count: int = 3):
+        super().__init__()
+        self.interp_type = interp_type
+        self.blender_attribute = blender_attribute
+        self.blender_attribute_count = blender_attribute_count
+        if self.interp_type == InterpType.LINEAR:
+            self.interp = self.add_interpolator('value', LinearInterpolator())
+        elif self.interp_type == InterpType.BEZIER:
+            self.interp = self.add_interpolator('value', BezierInterpolator())
+        else:
+            self.interp = self.add_interpolator('value', ConstantInterpolator())
+
+    def set_keyframe(self, t, value):
+        self.interp.set_keyframe(t, value)
+
+    def get_value(self, t, raw: bool = False):
+        return self.interp.get_value(t)
+    
+    def send_blender(self, uuidx: str):
+        for i in range(self.blender_attribute_count):
+            self.interp.send_blender(uuidx, self.blender_attribute, i)
+
+
 class FreePoseAnimator(AnimatorBase):
 
     class RotationType(Enum):
@@ -651,6 +676,8 @@ class SceneAnimator:
                         self.scene.objects[obj_uuid].pose = attrib_val
                     if obj_uuid in self.scene.lights.keys():
                         self.scene.lights[obj_uuid].pose = attrib_val
+                elif attrib_name == "scale":
+                    self.scene.objects[obj_uuid].scale = attrib_val
                 elif attrib_name == "visible":
                     self.scene.objects[obj_uuid].visible = attrib_val
         self.current_frame = t
@@ -683,6 +710,10 @@ class SceneAnimator:
     def set_object_pose(self, obj_uuid: str, animator):
         assert obj_uuid in self.scene.objects.keys()
         self.events[obj_uuid]["pose"] = animator
+
+    def set_object_scale(self, obj_uuid: str, animator):
+        assert obj_uuid in self.scene.objects.keys()
+        self.events[obj_uuid]["scale"] = animator
 
     def set_object_visibility(self, obj_uuid: str, animator):
         assert obj_uuid in self.scene.objects.keys()

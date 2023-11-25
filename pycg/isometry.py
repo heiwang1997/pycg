@@ -494,6 +494,12 @@ class ScaledIsometry:
         return self.iso.rotation
 
     @staticmethod
+    def from_inner_form(iso: Isometry, scale: float):
+        # inner form is sRx + t
+        new_t = iso.t / scale if scale != 0.0 else iso.t
+        return ScaledIsometry(s=scale, iso=Isometry(q=iso.q, t=new_t))
+
+    @staticmethod
     def from_matrix(mat, ortho=False):
         assert isinstance(mat, np.ndarray)
         assert mat.shape == (4, 4) or mat.shape == (3, 4)

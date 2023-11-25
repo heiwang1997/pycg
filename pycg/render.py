@@ -12,7 +12,7 @@ import os
 import tempfile
 import numpy as np
 from .animation import SceneAnimator
-from .isometry import Isometry
+from .isometry import Isometry, ScaledIsometry
 import pycg.vis as vis
 import pycg.image as image
 from pycg.exp import logger
@@ -737,7 +737,7 @@ class CameraIntrinsic:
 class SceneObject:
     USD_RAW_ATTR_NAME = "pycg_raw_attributes"
 
-    def __init__(self, geom, pose: Isometry = Isometry(), attributes: dict = None):
+    def __init__(self, geom, pose: Isometry = Isometry(), scale: float = 1.0, attributes: dict = None):
         if attributes is None:
             attributes = {}
         if isinstance(geom, vis.AnnotatedGeometry):
@@ -747,6 +747,7 @@ class SceneObject:
         else:
             self.geom, self.annotations = geom, None
         self.pose = pose
+        self.scale = scale
         self.visible = True
         """
         List of Attributes:
@@ -766,6 +767,10 @@ class SceneObject:
         """
         self.attributes = attributes
 
+    @property
+    def scaled_iso(self):
+        return ScaledIsometry.from_inner_form(self.pose, self.scale)
+
     def get_extent(self):
         # Note this is only a rough extent!
         if 'text_pos' in self.attributes:
@@ -777,11 +782,11 @@ class SceneObject:
             bound_points = bound_points.numpy()
         else:
             bound_points = np.asarray(bound_points)
-        bound_points = self.pose @ bound_points
+        bound_points = self.scaled_iso @ bound_points
         return np.min(bound_points, axis=0), np.max(bound_points, axis=0)
 
     def get_transformed(self):
-        return self.pose @ self.geom
+        return self.scaled_iso @ self.geom
 
     def get_filament_material(self, scene_shader, scene_point_size):
         mat = o3d.visualization.rendering.MaterialRecord()
@@ -833,12 +838,13 @@ class SceneObject:
         if "uniform_color" in self.attributes:
             mat.base_color = self.attributes["uniform_color"]
 
-        if len(self.geom.textures) == 1:
-            tex_img = np.asarray(self.geom.textures[0])[::-1]
-            tex_img = np.ascontiguousarray(tex_img)
-            mat.albedo_img = o3d.geometry.Image(tex_img)
-        elif len(self.geom.textures) > 1:
-            logger.warning(f"More than one texture found for {self.geom}, texture will not be displayed.")
+        if hasattr(self.geom, "textures"):
+            if len(self.geom.textures) == 1:
+                tex_img = np.asarray(self.geom.textures[0])[::-1]
+                tex_img = np.ascontiguousarray(tex_img)
+                mat.albedo_img = o3d.geometry.Image(tex_img)
+            elif len(self.geom.textures) > 1:
+                logger.warning(f"More than one texture found for {self.geom}, texture will not be displayed.")
 
         return mat
 
@@ -1218,7 +1224,7 @@ class Scene:
         if isinstance(geom, SceneObject):
             new_obj = copy.deepcopy(geom)
         else:
-            new_obj = SceneObject(geom, pose, attributes)
+            new_obj = SceneObject(geom, pose=pose, attributes=attributes)
         self.objects[new_name] = new_obj
         return self if not return_name else new_name
 
@@ -1427,7 +1433,8 @@ class Scene:
             else:
                 # Origin is mesh_obj.get_transformed()
                 sv.add_geometry(mesh_name, mesh_obj.geom, mat)
-                scene.set_geometry_transform(mesh_name, mesh_obj.pose.matrix)
+                pose_matrix = mesh_obj.scaled_iso.matrix
+                scene.set_geometry_transform(mesh_name, pose_matrix)
                 scene.set_geometry_double_sided(mesh_name, not self.backface_culling)
 
         import open3d.visualization.rendering as o3dr
@@ -1475,7 +1482,8 @@ class Scene:
             engine.setup_camera(self.camera_intrinsic.to_open3d_intrinsic(), self.camera_pose.inv().matrix)
         for obj_uuid in self.animator.events.keys():
             if scene.has_geometry(obj_uuid):
-                scene.set_geometry_transform(obj_uuid, self.objects[obj_uuid].pose.matrix)
+                pose_matrix = self.objects[obj_uuid].scaled_iso.matrix
+                scene.set_geometry_transform(obj_uuid, pose_matrix)
             if obj_uuid in self.lights.keys():
                 self.lights[obj_uuid].setup_filament_scene(obj_uuid, scene.scene, self, update=True)
 
