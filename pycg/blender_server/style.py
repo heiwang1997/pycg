@@ -139,9 +139,8 @@ def set_origin_material(uuidx):
     # Other Attributes.
     # target_obj.cycles.is_shadow_catcher = mesh_attributes.get("cycles.is_shadow_catcher", False)
     target_obj.is_shadow_catcher = mesh_attributes.get("cycles.is_shadow_catcher", False)
-    if mesh_attributes.get("smooth_shading", False):
-        for p in target_obj.data.polygons:
-            p.use_smooth = True
+    for p in target_obj.data.polygons:
+        p.use_smooth = mesh_attributes.get("smooth_shading", False)
 
     # If render wireframe. Create the new object (but share the same mesh data)
     wireframe_attr = mesh_attributes.get("material.wireframe", {"on": False})
