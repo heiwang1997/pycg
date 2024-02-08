@@ -18,15 +18,15 @@ python setup.py develop
 
 ## Publish to PyPI
 
-- If you are working locally:
+- Method 1 - use Github web portal -- a github action will automatically trigger if you click on 'create new release'.
+
+- Method 2 - If you are working locally:
 ```shell
 python -m pip install --upgrade build twine
 python -m build
 # Upload both source and wheel.
 twine upload dist/*
 ```
-
-- Using Github Actions. It is automatically triggered on package release (using web portal of Github).
 
 - If CI/CD failed, either 3 of the following works:
     1. Fix the bug, bump the version, and re-create a release using the new version.
