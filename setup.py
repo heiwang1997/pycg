@@ -9,7 +9,7 @@ with open("pycg/__init__.py", "r") as fh:
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
-advanced_req = ["scipy", "screeninfo", "pillow", "usd-core"]
+advanced_req = ["scipy"]
 
 setup(
     name='python-pycg',
@@ -30,22 +30,17 @@ setup(
     keywords=['pycg', 'graphics', '3d', 'visualization'],
     python_requires='>=3.6',
     install_requires=[
-        "numpy",
-        "matplotlib",
-        "pyquaternion",
-        "pyyaml",
-        "omegaconf",
-        "tqdm",
-        "pynvml",
-        "calmsize",
-        "rich",
+        "numpy", "matplotlib",
+        "pyquaternion", "pyyaml",
+        "omegaconf", "tqdm",
+        "pynvml", "calmsize",
+        "rich", "plyfile",
+        "trimesh", "imageio",
+        "screeninfo", "pillow", "usd-core"
     ],
     extras_require={
         "all": [
-            *advanced_req, "open3d-cpu>=0.17.0"
-        ],
-        "full": [
-            *advanced_req, "open3d-cpu==0.17.0+0c29de37f"
+            *advanced_req, "open3d_pycg_cpu"
         ]
     },
     include_package_data=True,

@@ -8,19 +8,18 @@ The toolbox is created from the perspective of researchers and would hopefully a
 
 ## Install
 
-To install a full-fledged version, use:
-```bash
-pip install -U python-pycg[full] -f https://pycg.huangjh.tech/packages/index.html
-```
-
-> Note that the need for the extra index URL if for our [customized version of Open3D](https://github.com/heiwang1997/Open3D) (with support for multi-window camera/light synchronization, animation maker and visualizer, scalar analyzer, etc).
-
-If you don't want to use our customized Open3D, simply do:
 ```shell
-pip install -U python-pycg[all]
+pip install -U python-pycg
 ```
 
-By default, Open3D will not be installed if you do `pip install python-pycg` directly, but all other non-visualization-related functions should work!
+**DONT READ MORE!!!!!! DONT READ MORE!!!! STOP NOW!!!!**
+
+HAHA. Actually I really want you to read this -- to install a full-fledged version, use:
+```bash
+pip install -U python-pycg[all] -f https://pycg.huangjh.tech/packages/index.html
+```
+
+> Note that the need for the extra index URL if for our [customized version of Open3D, `named open3d_pycg_cpu`](https://github.com/heiwang1997/Open3D) (with support for multi-window camera/light synchronization, animation maker and visualizer, scalar analyzer, etc).
 
 For developers, clone this repository and install it if you want to use newest features:
 ```shell

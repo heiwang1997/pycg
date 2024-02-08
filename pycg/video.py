@@ -10,13 +10,16 @@ from pathlib import Path
 import tempfile
 import shutil
 import tqdm
+from typing import Union
+from . import image
 
 
 def make_video(input_format: str, output_path: str, fps: int):
     os.system(f"ffmpeg -r {fps} -i {input_format} -crf 25 -pix_fmt yuv420p {output_path}")
 
 
-def make_video_xw264(input_format: str, output_path: str, fps: int = None, crf: float = 23.5):
+def make_video_xw264(input_format: str, output_path: str, fps: int = None, crf: float = 23.5,
+                     start_idx: Union[int] = None, end_idx: Union[int] = None):
     """
     Call the x264 program with a best set of parameters found by Maruto-toolbox.
         Note that this does not support audio yet!
@@ -43,6 +46,10 @@ def make_video_xw264(input_format: str, output_path: str, fps: int = None, crf: 
         i_fname = i_files.stem
         i_digit_str = ''.join(c for c in i_fname if c.isdigit())
         i_idx = int(i_digit_str) if len(i_digit_str) > 0 else -1
+        if start_idx is not None and i_idx < start_idx:
+            continue
+        if end_idx is not None and i_idx > end_idx:
+            continue
         input_named_files.append([i_files, i_idx])
 
     # Sort file according to extracted indices
@@ -54,6 +61,7 @@ def make_video_xw264(input_format: str, output_path: str, fps: int = None, crf: 
     if len(missing_indices) > 0:
         print(f"Missing {len(missing_indices)} of {len(full_indices)} files.")
 
+    # --vf crop:0,0,1,1 
     XW_ARGS = "--preset 8 -I 250 -r 4 -b 3 --me umh -i 1 --scenecut 60 -f 1:1 --qcomp 0.5 " + \
               "--psy-rd 0.3:0 --aq-mode 2 --aq-strength 0.8"
 

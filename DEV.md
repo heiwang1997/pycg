@@ -5,9 +5,6 @@
 - For projects / enviroments that would modify / develop pycg, use `develop`:
 ```shell
 python setup.py develop
-
-# Fix linting/IntelliSense [one-time operation, optional]
-bash dev_link.sh
 ```
 
 - For other projects / environments, just install it and occasionally upgrade it for newest features.

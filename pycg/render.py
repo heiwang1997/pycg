@@ -3,14 +3,20 @@ Copyright 2022 by Jiahui Huang. All rights reserved.
 This file is part of PyCG toolbox and is released under "MIT License Agreement".
 Please see the LICENSE file that should have been included as part of this package.
 """
-
 import functools
-import pdb
-import shutil
-import json
 import os
+import pdb
 import tempfile
+import uuid
+import copy
+import pickle
+import textwrap
+from pathlib import Path
+from typing import List, Dict, Tuple, Union, Optional, Callable, Any
+
 import numpy as np
+from pyquaternion import Quaternion
+
 from .animation import SceneAnimator
 from .isometry import Isometry, ScaledIsometry
 import pycg.vis as vis
@@ -19,14 +25,8 @@ from pycg.exp import logger
 import pycg.o3d as o3d
 import pycg.blender_client as blender
 from pycg import get_assets_path
-from pathlib import Path
-from pyquaternion import Quaternion
-import uuid
-import copy
-import pickle
-import textwrap
-from open3d.visualization import gui
 
+gui = o3d.visualization.gui
 
 class GLEngineWrapper:
     def __init__(self, engine):
@@ -349,7 +349,7 @@ class VisualizerManager:
 
         if use_new_api:
             # Please refer to Open3D/python/open3d/visualization/draw.py
-            gui.Application.instance.initialize()
+            gui.Application.instance.initialize(str(o3d.get_resource_path()))
 
             all_windows = []
             for scene_idx, (cur_scene, cur_title) in enumerate(zip(self.scenes, self.scene_titles)):
@@ -1437,7 +1437,7 @@ class Scene:
                 scene.set_geometry_transform(mesh_name, pose_matrix)
                 scene.set_geometry_double_sided(mesh_name, not self.backface_culling)
 
-        import open3d.visualization.rendering as o3dr
+        o3dr = o3d.visualization.rendering
         scene.view.set_color_grading(o3dr.ColorGrading(o3dr.ColorGrading.Quality.ULTRA,
                                                        o3dr.ColorGrading.ToneMapping.LINEAR))
         scene.view.set_shadowing(True, scene.view.ShadowType.VSM)
@@ -1586,13 +1586,18 @@ class Scene:
 
         return rgb_img
 
-    def render_blender_animation(self, do_render: bool = True, quality: int = 128):
+    def render_blender_animation(self, do_render: bool = True, quality: int = 128,
+                                 start_t: Optional[int] = None, end_t: Optional[int] = None):
         self._setup_blender_static()
         self.animator.send_blender()
         if not do_render or 'PAUSE_BEFORE_RENDER' in os.environ.keys():
             blender.poll_notified()
 
         t_start, t_end = self.animator.get_range()
+        if start_t is not None:
+            t_start = start_t
+        if end_t is not None:
+            t_end = end_t
         for t_cur in range(t_start, t_end + 1):
             # This will have the same time of 'render_animation'
             blender.send_eval(f"bpy.context.scene.frame_set({t_cur})")

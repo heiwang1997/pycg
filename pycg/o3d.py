@@ -1,27 +1,26 @@
 from pycg.exp import logger
 
-OPTION_1 = "(recommended, using customized Open3D that enables view sync, animation, ...) \n\n" \
-           "pip install python-pycg[full] -f https://pycg.huangjh.tech/packages/index.html\n\n"
-OPTION_2 = "(using official Open3D) \n\npip install python-pycg[all]\n\n"
+O3D_INSTRUCTION = "pip install open3d_pycg_cpu -f https://pycg.huangjh.tech/packages/index.html"
 
 try:
-    from open3d import *
-except ImportError:
-    logger.error(f"Open3D not installed! You can try either the following 2 options: \n"
-                 f" 1. {OPTION_1}\n"
-                 f" 2. {OPTION_2}")
-    raise
-
-
-if hasattr(visualization.VisualizerWithKeyCallback, 'register_view_refresh_callback'):
+    from open3d_pycg import *
     is_custom_build = True
-else:
-    is_custom_build = False
-    logger.warning("Customized build of Open3D is not detected, to resolve this you can do:\n"
-                   f"{OPTION_1}")
+except ImportError:
+    try:
+        from open3d import *
+        logger.warning(f"Customized build of Open3D is not detected, to resolve this you can do: {O3D_INSTRUCTION}")
+        is_custom_build = False
+    except ImportError:
+        logger.error(f"Open3D not installed, to resolve this you can do: {O3D_INSTRUCTION}")
+        raise
 
 
 def get_resource_path():
-    import open3d
+    try:
+        import open3d_pycg
+        path = open3d_pycg.__path__[0]
+    except ImportError:
+        import open3d
+        path = open3d.__path__[0]
     from pathlib import Path
-    return Path(open3d.__path__[0]) / "resources"
+    return Path(path) / "resources"

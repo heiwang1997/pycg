@@ -27,8 +27,7 @@ try:
         q.put(get_monitors()[0])
 
     queue = Queue()
-    p = Process(target=get_monitor_size, args=(queue, ),
-                daemon=True, stderr=None, stdout=None)
+    p = Process(target=get_monitor_size, args=(queue, ))
     p.start()
     p.join(timeout=0.5)
     monitor_res = queue.get_nowait()
@@ -168,7 +167,7 @@ def text_pcd(text, pos, direction=None, degree=0.0, font='DejaVuSansMono.ttf', f
     from pyquaternion import Quaternion
 
     font_obj = ImageFont.truetype(font, font_size)
-    font_dim = font_obj.getsize(text)
+    font_dim = (int(font_obj.getlength(text)), 24)
 
     img = Image.new('RGB', font_dim, color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
@@ -524,7 +523,7 @@ def frame(transform: Isometry = Isometry(), size=1.0):
 
 
 def camera(transform: Isometry = Isometry(), wh_ratio: float = 4.0 / 3.0, scale: float = 1.0, fovx: float = 90.0,
-           color_id: int = -1):
+           color_id: int = -1, image: np.ndarray = None):
     pw = np.tan(np.deg2rad(fovx / 2.)) * scale
     ph = pw / wh_ratio
     all_points = np.asarray([
@@ -547,8 +546,29 @@ def camera(transform: Isometry = Isometry(), wh_ratio: float = 4.0 / 3.0, scale:
     else:
         my_color = np.asarray(matplotlib.cm.get_cmap('tab10').colors)[color_id, :3]
     geom.colors = o3d.utility.Vector3dVector(np.repeat(np.expand_dims(my_color, 0), line_indices.shape[0], 0))
-
     geom.transform(transform.matrix)
+
+    if image is not None:
+        img_mesh = o3d.geometry.TriangleMesh()
+        img_mesh.vertices = o3d.utility.Vector3dVector(np.array([
+            [pw, ph, scale],
+            [pw, -ph, scale],
+            [-pw, ph, scale],
+            [-pw, -ph, scale],
+        ]))
+        img_mesh.triangles = o3d.utility.Vector3iVector(np.asarray([
+            [0, 1, 2], [2, 1, 3],
+        ]))
+        img_mesh.triangle_uvs = o3d.utility.Vector2dVector(np.array([
+            [1.0, 1.0], [1.0, 0.0], [0.0, 1.0],
+            [0.0, 1.0], [1.0, 0.0], [0.0, 0.0]
+        ]))
+        img_mesh.textures = [o3d.geometry.Image(image)]
+        img_mesh.triangle_material_ids = o3d.utility.IntVector(
+            np.zeros((len(img_mesh.triangles, )), dtype=np.int32))
+        img_mesh.transform(transform.matrix)
+        geom = [geom, img_mesh]
+
     return geom
 
 
@@ -952,6 +972,16 @@ def lineset(linset_or_points: Union[np.ndarray, "torch.Tensor", o3d.geometry.Lin
     return geom
 
 
+def ray(rays_o: Union[np.ndarray, "torch.Tensor"], rays_d: Union[np.ndarray, "torch.Tensor"], length: float = 3.0):
+    rays_o = ensure_from_torch(rays_o, 2)
+    rays_d = ensure_from_torch(rays_d, 2)
+    assert rays_o.shape[0] == rays_d.shape[0]
+    assert rays_o.shape[1] == 3 and rays_d.shape[1] == 3
+    rays_d = rays_d / np.linalg.norm(rays_d, axis=1, keepdims=True)
+    rays_e = rays_o + rays_d * length
+    return lineset(np.concatenate([rays_o, rays_e], axis=0), np.stack([np.arange(len(rays_o)), np.arange(len(rays_o)) + len(rays_o)], axis=1))
+
+
 def lineset_mesh(lst: o3d.geometry.LineSet, radius: float, resolution: int = 10):
     end_points = np.asarray(lst.points)
     point_indices = np.asarray(lst.lines)
@@ -1014,14 +1044,14 @@ def wireframe(mesh: o3d.geometry.TriangleMesh):
     return geom
 
 
-def wireframe_bbox(extent_min=None, extent_max=None, 
+def wireframe_bbox(extent_min=None, extent_max=None,
                    bbox: BoundingBox = None,
                    solid=False, tube=False, tube_radius=0.001,
                    cid: Union[np.ndarray, "torch.Tensor"] = None,
                    ucid: int = 0, cmap: str = 'tab10',
                    cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False,
                    color: Union[np.ndarray, "torch.Tensor"] = None):
-    
+
     if bbox is None:
         if extent_min is None:
             extent_min = [0.0, 0.0, 0.0]
@@ -1385,7 +1415,7 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
             1. kd is not loaded.
             2. texture (kd_map) can be loaded, but if some textures are empty, then it refuses to display
         any texture: https://github.com/isl-org/Open3D/issues/4916
-        For now, we only regard kd and kd_map in MLT files, 
+        For now, we only regard kd and kd_map in MLT files,
             if load_obj_textures == True, we will then return a list of triangle meshes, each either with textures,
         or with per-vertex colors.
             else, we return a mesh with per-vertex colors, the one with textures will be the average color of the

@@ -10,10 +10,10 @@ import socket
 from pathlib import Path
 import subprocess
 import os, shutil
-import open3d as o3d
 import numpy as np
 from pycg.isometry import Isometry
 from pycg.exp import logger
+from pycg import o3d
 from pyquaternion import Quaternion
 from multiprocessing.managers import BaseManager
 
