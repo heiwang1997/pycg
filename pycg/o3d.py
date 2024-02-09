@@ -8,11 +8,10 @@ try:
 except ImportError:
     try:
         from open3d import *
-        logger.warning(f"Customized build of Open3D is not detected, to resolve this you can do: {O3D_INSTRUCTION}")
+        logger.warning(f"Customized build of Open3D is not detected, to resolve this you can do: \n{O3D_INSTRUCTION}")
         is_custom_build = False
     except ImportError:
-        logger.error(f"Open3D not installed, to resolve this you can do: {O3D_INSTRUCTION}")
-        raise
+        raise ImportError(f"Open3D not installed, to resolve this you can do: {O3D_INSTRUCTION}")
 
 
 def get_resource_path():

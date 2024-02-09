@@ -24,7 +24,8 @@ pip install -U python-pycg[all] -f https://pycg.huangjh.tech/packages/index.html
 For developers, clone this repository and install it if you want to use newest features:
 ```shell
 git clone --recursive https://github.com/heiwang1997/pycg
-pip install -e .[full]      # Most modern, but some static analyzing tool (e.g. pylance) will fail!
+pip install open3d_pycg_cpu -f https://pycg.huangjh.tech/packages/index.html
+pip install -e .[all]      # Most modern, but some static analyzing tool (e.g. pylance) will fail!
                             #   Now it will create weird __editable__.*.pth files!
 python setup.py develop     # Deprecated by the community, but it works better.
 ```

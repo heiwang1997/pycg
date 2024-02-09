@@ -9,7 +9,6 @@ with open("pycg/__init__.py", "r") as fh:
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
-advanced_req = ["scipy"]
 
 setup(
     name='python-pycg',
@@ -36,11 +35,11 @@ setup(
         "pynvml", "calmsize",
         "rich", "plyfile",
         "trimesh", "imageio",
-        "screeninfo", "pillow", "usd-core"
+        "screeninfo", "pillow", "usd-core", "scipy"
     ],
     extras_require={
         "all": [
-            *advanced_req, "open3d_pycg_cpu"
+            "open3d_pycg_cpu"
         ]
     },
     include_package_data=True,
