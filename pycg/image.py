@@ -6,7 +6,7 @@ Please see the LICENSE file that should have been included as part of this packa
 
 import math
 import textwrap
-from typing import List, Union
+from typing import List, Union, Optional
 
 import numpy as np
 from PIL import Image
@@ -273,6 +273,32 @@ def hlayout_images(image_list: list, slot_widths: list = None, height: int = -1,
         place_center_x += (cur_slot_w / 2.) + gap + (next_slot_w / 2.)
 
     return canvas
+
+
+def image_grid(image_list: list, n_cols: int = 2, n_rows: Optional[int] = None, gap: int = 0, background: Optional[list] = None):
+    if background is None:
+        background = [1.0, 1.0, 1.0, 0.0]
+
+    if n_rows is None:
+        n_rows = len(image_list) // n_cols
+
+    if n_rows * n_cols > len(image_list):
+        raise ValueError(f"Not enough images to fill the grid! {n_rows} x {n_cols} > {len(image_list)}")
+    else:
+        image_list = image_list[:n_rows * n_cols]
+
+    image_list = [ensure_float_image(t) for t in image_list]
+    slot_widths = []
+    for col_idx in range(n_cols):
+        slot_widths.append(max([t.shape[1] for t in image_list[col_idx::n_cols]]))
+
+    grid_img = []
+    for row_idx in range(n_rows):
+        row_images = image_list[row_idx * n_cols: (row_idx + 1) * n_cols]
+        row_img = hlayout_images(row_images, slot_widths=slot_widths, gap=gap, background=background)
+        grid_img.append(row_img)
+
+    return vlayout_images(grid_img, slot_heights=[t.shape[0] for t in grid_img], gap=gap, background=background)
 
 
 def text(text, font='DejaVuSansMono.ttf', font_size=16, max_width=None):

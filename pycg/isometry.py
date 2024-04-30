@@ -271,6 +271,7 @@ class Isometry:
         rot_mat = (c * np.identity(3) +
                    (1 - c) * np.outer(axis, axis) +
                    s * so3_wedge(axis))
+
         return Isometry(q=Quaternion(matrix=rot_mat))
 
     @property
@@ -448,10 +449,14 @@ class Isometry:
             return (other @ self.q.rotation_matrix.T + self.t[np.newaxis, :]).astype(other.dtype)
 
     @staticmethod
-    def interpolate(source, target, alpha):
-        iquat = Quaternion.slerp(source.q, target.q, alpha)
-        it = source.t * (1 - alpha) + target.t * alpha
-        return Isometry(q=iquat, t=it)
+    def interpolate(source, target, alpha, cartesian: bool = True):
+        if cartesian:
+            iquat = Quaternion.slerp(source.q, target.q, alpha)
+            it = source.t * (1 - alpha) + target.t * alpha
+            return Isometry(q=iquat, t=it)
+        else:
+            v = (source.inv() @ target).log()
+            return source @ Isometry.from_twist(alpha * v)
 
     def validified(self):
         q = self.q.normalised
