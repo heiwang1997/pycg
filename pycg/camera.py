@@ -133,11 +133,84 @@ class CameraIntrinsic:
         ])
         return ndc_mat @ perspective_mat
 
-    def get_rays(self, normalized: bool = True):
-        xx, yy = np.meshgrid(np.arange(0, self.w) + 0.5, np.arange(0, self.h) + 0.5)
-        mg = np.concatenate((xx.reshape(1, -1), yy.reshape(1, -1)), axis=0)
-        mg_homo = np.vstack((mg, np.ones((1, mg.shape[1]))))
-        pc = np.matmul(self.inv_K, mg_homo)
-        if normalized:
-            pc /= np.linalg.norm(pc, axis=0)
-        return pc.T.reshape((self.w, self.h, 3))
+    def get_rays(self, device=None, normalized: bool = True):
+
+        if device is None:
+            # Numpy backend
+            uu, vv = np.meshgrid(
+                (np.arange(0, self.w) + 0.5 - self.cx) * (1 / self.fx),
+                (np.arange(0, self.h) + 0.5 - self.cy) * (1 / self.fy),
+                indexing='xy'
+            )
+            xyz = np.stack([uu, vv, np.ones_like(uu)], axis=-1)
+
+            if normalized:
+                xyz /= np.linalg.norm(xyz, axis=0)
+
+            return xyz.reshape((self.h, self.w, 3))
+        
+        else:
+            # Pytorch backend
+            import torch
+
+            uu, vv = torch.meshgrid(
+                (torch.arange(self.w, device=device) + 0.5 - self.cx) * (1 / self.fx),
+                (torch.arange(self.h, device=device) + 0.5 - self.cy) * (1 / self.fy),
+                indexing='xy'
+            )
+            xyz = torch.stack([uu, vv, torch.ones_like(uu)], dim=-1)
+
+            if normalized:
+                xyz = xyz / torch.linalg.norm(xyz, dim=-1, keepdim=True)
+
+            return xyz.view(self.h, self.w, 3)
+
+    def nvdiffrast_matrices(self, pose: Isometry, near: float = 0.01, far: float = 100.0):
+        """
+        v_ndc = ctx.vertex_transform(v_world, out["mvp"])
+        """
+        return {
+            "mvp": self.world_to_ndc(near, far) @ pose.inv().matrix
+        }
+    
+    def gsplat_matrices(self, pose: Isometry, device=None, near: float = 0.01, far: float = 100.0):
+        """
+        raster_settings = GaussianRasterizationSettings(
+            image_height=int(viewpoint_camera.h),
+            image_width=int(viewpoint_camera.w),
+            tanfovx=viewpoint_camera.w / (2 * viewpoint_camera.fx),
+            tanfovy=viewpoint_camera.h / (2 * viewpoint_camera.fy),
+            viewmatrix=viewpoint_camera.world_view_transform,
+            projmatrix=viewpoint_camera.full_proj_transform,
+            campos=viewpoint_camera.camera_center,
+            ...
+        )
+        """
+        P = np.zeros((4, 4))
+        P[0, 0] = 2 * self.fx / self.w
+        P[1, 1] = 2 * self.fy / self.h
+        P[0, 2] = 1 - 2 * self.cx / self.w
+        P[1, 2] = 2 * self.cy / self.h - 1
+        P[3, 2] = 1.0
+        P[2, 2] = far / (far - near)
+        P[2, 3] = -(far * near) / (far - near)
+
+        wvt = pose.inv().matrix.T
+        proj = wvt @ P.T
+        campos = pose.t
+
+        if device is not None:
+            import torch
+            wvt = torch.tensor(wvt, device=device).float()
+            proj = torch.tensor(proj, device=device).float()
+            campos = torch.tensor(campos, device=device).float()
+
+        return {
+            "image_height": int(self.h),
+            "image_width": int(self.w),
+            "tanfovx": self.w / (2 * self.fx),
+            "tanfovy": self.h / (2 * self.fy),
+            "viewmatrix": wvt,
+            "projmatrix": proj,
+            "campos": campos
+        }

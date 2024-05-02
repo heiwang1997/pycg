@@ -434,12 +434,10 @@ class Isometry:
             return other.transform(self.matrix)
         if hasattr(other, "device"):  # Torch tensor
             th_R, th_t = self.torch_matrices(other.device)
-            if other.ndim == 2 and other.size(1) == 3:  # (N,3)
-                return other @ th_R.t() + th_t.unsqueeze(0)
-            elif other.ndim == 1 and other.size(0) == 3:  # (3,)
-                return th_R @ other + th_t
-            else:
-                raise NotImplementedError
+            assert other.size(-1) == 3
+            res = other.view(-1, 3) @ th_R.t() + th_t.unsqueeze(0)
+            return res.view(other.shape)
+
         if isinstance(other, Isometry) or isinstance(other, ScaledIsometry):
             return self.dot(other)
         if type(other) != np.ndarray or other.ndim == 1:
