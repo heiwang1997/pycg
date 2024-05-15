@@ -116,6 +116,17 @@ class CameraIntrinsic:
                                self.cx * factor,
                                self.cy * factor)
 
+    @classmethod
+    def interpolate(cls, intr1, intr2, t):
+        return CameraIntrinsic(
+            int(intr1.w * (1 - t) + intr2.w * t),
+            int(intr1.h * (1 - t) + intr2.h * t),
+            intr1.fx * (1 - t) + intr2.fx * t,
+            intr1.fy * (1 - t) + intr2.fy * t,
+            intr1.cx * (1 - t) + intr2.cx * t,
+            intr1.cy * (1 - t) + intr2.cy * t
+        )
+
     def world_to_ndc(self, near: float = 0.01, far: float = 100.0):
         perspective_mat = np.asarray([
             [self.fx, 0,       -self.w / 2. + self.cx, 0.0],
@@ -189,7 +200,7 @@ class CameraIntrinsic:
         P = np.zeros((4, 4))
         P[0, 0] = 2 * self.fx / self.w
         P[1, 1] = 2 * self.fy / self.h
-        P[0, 2] = 1 - 2 * self.cx / self.w
+        P[0, 2] = 2 * self.cx / self.w - 1
         P[1, 2] = 2 * self.cy / self.h - 1
         P[3, 2] = 1.0
         P[2, 2] = far / (far - near)
