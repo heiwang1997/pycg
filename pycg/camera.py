@@ -77,6 +77,16 @@ class CameraIntrinsic:
         delta = 0.5 if fix_bug else 0.0
         intr.set_intrinsics(width=self.w, height=self.h, fx=self.fx, fy=self.fy, cx=self.cx - delta, cy=self.cy - delta)
         return intr
+    
+    @staticmethod
+    def from_angle_coverage(height: int, theta_min: float = -45.0, theta_max: float = 45.0, edge: bool = True):
+        angle_radian = np.deg2rad(max(abs(theta_min), abs(theta_max)))
+        cy = height / 2
+        fy = cy / np.tan(angle_radian)
+        if edge:
+            fy *= np.sqrt(2) / 2.
+        cx = fx = fy
+        return CameraIntrinsic(int(cx * 2), height, fx, fy, cx, cy)
 
     @property
     def K(self):

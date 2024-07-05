@@ -7,6 +7,7 @@ Please see the LICENSE file that should have been included as part of this packa
 from typing import Union, List
 import matplotlib.colors
 import matplotlib.cm
+import matplotlib.pyplot as plt
 import numpy as np
 
 """
@@ -151,4 +152,16 @@ def map_quantized_color(cid: Union[int, np.ndarray], cmap: str = 'tab10'):
     color_map = np.vstack([color_map, np.array(_void_color)[None, :]])
     cid[cid < 0] = color_map.shape[0] - 1
     color = color_map[cid]
+    return color if not single_value else color[0]
+
+
+def map_continuous_color(value: Union[float, np.ndarray], cmap: str = 'viridis'):
+
+    single_value = False
+    if isinstance(value, float) or isinstance(value, np.float64):
+        value = np.full((1, ), value, dtype=float)
+        single_value = True
+
+    value = np.clip(value, 0.0, 1.0)
+    color = plt.get_cmap(cmap)(value)
     return color if not single_value else color[0]

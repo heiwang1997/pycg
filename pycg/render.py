@@ -1599,9 +1599,9 @@ class Scene:
         #     os.environ['DISPLAY'] = x11_environ
         return np.array(img)
 
-    def render_filament_animation(self, headless: bool = True):
+    def render_filament_animation(self):
         renderer = o3d.visualization.rendering.OffscreenRenderer(
-            self.camera_intrinsic.w, self.camera_intrinsic.h, "", headless)
+            self.camera_intrinsic.w, self.camera_intrinsic.h, "")
         self._build_filament_engine(renderer)
 
         t_start, t_end = self.animator.get_range()

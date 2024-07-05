@@ -23,8 +23,11 @@ try:
 
     # Get monitor size (for some reason, there's a segfault so I can only handle it this way...)
     def get_monitor_size(q: Queue):
-        from screeninfo import get_monitors
-        q.put(get_monitors()[0])
+        try:
+            from screeninfo import get_monitors
+            q.put(get_monitors()[0])
+        except Exception:
+            pass
 
     queue = Queue()
     p = Process(target=get_monitor_size, args=(queue, ))
