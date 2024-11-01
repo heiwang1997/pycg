@@ -38,7 +38,14 @@ def make_video_xw264(input_format: str, output_path: str, fps: int = None, crf: 
     #     input_format = input_format / (f"%0{stem_wildcard}d" + example_file.suffix)
 
     if input_format.is_dir():
-        input_format = input_format / "*.png"
+        if len(list(input_format.glob("*.png"))) > 0:
+            input_format = input_format / "*.png"
+            input_suffix = ".png"
+        elif len(list(input_format.glob("*.jpg"))) > 0:
+            input_format = input_format / "*.jpg"
+            input_suffix = ".jpg"
+        else:
+            raise ValueError(f"Cannot find any image files in {input_format}.")
 
     input_files = glob.glob(str(input_format))
     input_named_files = []
@@ -86,5 +93,5 @@ def make_video_xw264(input_format: str, output_path: str, fps: int = None, crf: 
     # Copy to temp location.
     with tempfile.TemporaryDirectory() as video_tmp_dir:
         for idx, (fname, _) in enumerate(tqdm.tqdm(input_named_files)):
-            shutil.copy(fname, Path(video_tmp_dir) / f"{idx:06d}.png")
-        os.system(cmdlines_args.format(input_format=f"{video_tmp_dir}/%06d.png", output_path=output_path))
+            shutil.copy(fname, Path(video_tmp_dir) / f"{idx:06d}{input_suffix}")
+        os.system(cmdlines_args.format(input_format=f"{video_tmp_dir}/%06d{input_suffix}", output_path=output_path))

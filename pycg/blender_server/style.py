@@ -109,9 +109,9 @@ def set_origin_material(uuidx):
         main_shader_node = nodes.new(type='ShaderNodeBsdfPrincipled')
         output_node = nodes.new(type='ShaderNodeOutputMaterial')
         # Main material attribute
-        main_shader_node.inputs[4].default_value = mesh_attributes.get("material.metallic", 0.0)
-        main_shader_node.inputs[5].default_value = mesh_attributes.get("material.specular", 0.0)
-        main_shader_node.inputs[7].default_value = mesh_attributes.get("material.roughness", 0.5)
+        main_shader_node.inputs["Metallic"].default_value = mesh_attributes.get("material.metallic", 0.0)
+        main_shader_node.inputs["Specular"].default_value = mesh_attributes.get("material.specular", 0.0)
+        main_shader_node.inputs["Roughness"].default_value = mesh_attributes.get("material.roughness", 0.5)
         # Link nodes
         links.new(input_color_node.outputs[0], main_shader_node.inputs[0])
         links.new(main_shader_node.outputs[0], output_node.inputs[0])
@@ -126,7 +126,7 @@ def set_origin_material(uuidx):
             # links.new(transparent_shader_node.outputs[0], node_mix_shader.inputs[1])
             # links.new(main_shader_node.outputs[0], node_mix_shader.inputs[2])
             # links.new(node_mix_shader.outputs[0], output_node.inputs[0])
-        main_shader_node.inputs[18].default_value = mesh_attributes.get("alpha", 1.0)
+        main_shader_node.inputs["Alpha"].default_value = mesh_attributes.get("alpha", 1.0)
 
     # Visibility layers.
     if not mesh_attributes.get("cycles_visibility.camera", True):
@@ -163,6 +163,8 @@ def set_origin_material(uuidx):
             mat = bpy.data.materials.new(name=wireframe_mat_name)
             mat.diffuse_color = (0, 0, 0, 1)
             target_obj.data.materials.append(mat)       # Materials are defined on meshes.
+        else:
+            target_obj.data.materials.append(old_mat)
 
 
 def register_style():

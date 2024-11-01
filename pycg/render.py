@@ -3,30 +3,31 @@ Copyright 2022 by Jiahui Huang. All rights reserved.
 This file is part of PyCG toolbox and is released under "MIT License Agreement".
 Please see the LICENSE file that should have been included as part of this package.
 """
+import copy
 import functools
 import os
 import pdb
-import tempfile
-import uuid
-import copy
 import pickle
+import tempfile
 import textwrap
+import uuid
 from pathlib import Path
-from typing import List, Dict, Tuple, Union, Optional, Callable, Any
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from pyquaternion import Quaternion
 
+import pycg.blender_client as blender
+import pycg.image as image
+import pycg.o3d as o3d
+import pycg.vis as vis
+from pycg import get_assets_path
+from pycg.camera import CameraIntrinsic
+from pycg.exp import logger
+from pycg.interfaces import Renderable
+
 from .animation import SceneAnimator
 from .isometry import Isometry, ScaledIsometry
-import pycg.vis as vis
-import pycg.image as image
-from pycg.exp import logger
-import pycg.o3d as o3d
-import pycg.blender_client as blender
-from pycg import get_assets_path
-from pycg.interfaces import Renderable
-from pycg.camera import CameraIntrinsic
 
 gui = o3d.visualization.gui
 
@@ -745,7 +746,7 @@ class SceneObject:
 
     def add_usd_prim(self, stage, prim_path):
         # https://raw.githubusercontent.com/NVIDIAGameWorks/kaolin/master/kaolin/io/usd.py
-        from pxr import UsdGeom, UsdShade, Vt, Gf, Sdf
+        from pxr import Gf, Sdf, UsdGeom, UsdShade, Vt
 
         prim_path = sanitize_usd_prim_path(prim_path)
         if isinstance(self.geom, o3d.geometry.TriangleMesh):
@@ -878,7 +879,7 @@ class SceneLight:
                 print(f"Warning: light {name} of type {self.type} is not yet supported in filament!")
 
     def add_usd_prim(self, stage, prim_path):
-        from pxr import UsdLux, UsdGeom, Vt, Gf
+        from pxr import Gf, UsdGeom, UsdLux, Vt
 
         prim_path = sanitize_usd_prim_path(prim_path)
 
@@ -981,60 +982,13 @@ class Scene:
         else:
             raise FileNotFoundError
 
-    def export(self, path, geometry_only: bool = False):
-        """
-        Export using USD file.
-            To render in omniverse
-        :return:
-        """
-        from pxr import Usd, UsdGeom, Vt, Gf, Sdf
+    def export(self, path: Union[str, Path]):
+        with Path(path).open('wb') as scene_f:
+            pickle.dump(self, scene_f)
 
-        if self.camera_intrinsic.w < self.camera_intrinsic.h and not geometry_only:
-            print("Your camera is vertical. Rendering in omniverse may not re-create the same look."
-                  "Consider rotate it by 90 degrees.")
-            # Otherwise, when importing to OV, select '/camera/main' in the viewport, uncheck 'fit viewport',
-            #   and manually change the resolution to desired ratio in `render movie' window.
-
-        stage = Usd.Stage.CreateNew(str(path))
-        if self.up_axis == '+Y':
-            UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
-        else:
-            UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
-        stage.SetMetadata('comment', 'Exported from pycg.Scene')
-        # stage.SetCustomDataByKey('up_axis', self.up_axis)
-
-        # Add Scene objects.
-        for obj_name, obj in self.objects.items():
-            obj.add_usd_prim(stage, f"/objects/{obj_name}")
-
-        if not geometry_only:
-
-            # Setup camera
-            usd_relative_camera = Isometry.from_axis_angle('+X', degrees=180.0)
-            cam_base_xform = UsdGeom.Xform.Define(stage, "/camera_base")
-            cam_base_xform.AddTransformOp().Set(Gf.Matrix4d(self.camera_base.matrix.T))
-            cam_prim = UsdGeom.Camera.Define(stage, "/camera_base/relative_camera")
-            cam_prim.AddTransformOp().Set(Gf.Matrix4d(
-                (self.relative_camera_pose @ usd_relative_camera).matrix.T))
-            self.camera_intrinsic.set_usd_attributes(cam_prim)
-
-            # Setup lights
-            for light_name, light in self.lights.items():
-                light.add_usd_prim(stage, f"/lights/{light_name}")
-
-            # Setup animations
-            if self.animator.is_enabled():
-                self.animator.export_usd(stage)
-
-        stage.GetRootLayer().Save()
-
-    def import_usd(self, path):
-        from pxr import Usd, Vt
-        stage = Usd.Stage.Open(path)
-        xform = stage.GetPrimAtPath('/hello')
-        sphere = stage.GetPrimAtPath('/hello/world')
-
-        print(xform.GetPropertyNames())
+    @staticmethod
+    def build_from(path: Union[str, Path]):
+        pass
 
     def load_camera(self):
         with self.cam_path.open('rb') as cam_f:
@@ -1615,7 +1569,8 @@ class Scene:
         # pyrender seems to have a better support for EGL.
         import os
         os.environ['PYOPENGL_PLATFORM'] = 'egl'
-        import pyrender, trimesh
+        import pyrender
+        import trimesh
 
         pr_scene = pyrender.Scene(
             ambient_light=[self.ambient_color[-1]] * 3,
