@@ -52,9 +52,15 @@ class BlenderConnection:
         location = ("localhost", self.port)
         result_of_check = a_socket.connect_ex(location)
         if result_of_check != 0:
-            pg = subprocess.Popen([find_blender(), '--python',
-                                   str(Path(__file__).parent / "blender_server" / "main.py"),
-                                   '--', '--port', str(self.port)])
+            has_display = os.environ.get('DISPLAY', None) is not None
+            run_commands = [
+                find_blender(), '--python',
+                str(Path(__file__).parent / "blender_server" / "main.py"),
+                '--', '--port', str(self.port)
+            ]
+            if not has_display:
+                run_commands.insert(1, '--background')
+            pg = subprocess.Popen(run_commands)
 
     def _connect(self):
         self._run_blender()

@@ -1,9 +1,10 @@
 """
-Copyright 2022 by Jiahui Huang. All rights reserved.
+Copyright 2024 by Jiahui Huang. All rights reserved.
 This file is part of PyCG toolbox and is released under "MIT License Agreement".
 Please see the LICENSE file that should have been included as part of this package.
 """
 
+import time
 import bpy
 import argparse
 from bpy import data as D
@@ -347,24 +348,26 @@ def init_env():
     # Init workspace by changing Layout screen
     # workspace contains screens, screens contains areas (of different functions)
     # and areas contains regions (e.g. transformation panel)
-    split_context = {
-        'area': [p for p in D.workspaces['Layout'].screens[0].areas if p.type == 'VIEW_3D'][0],
-        'screen': D.workspaces['Layout'].screens[0]
-    }
-    bpy.ops.screen.area_split(split_context, direction='VERTICAL', factor=0.3)
+    if not bpy.app.background:
+        split_context = {
+            'area': [p for p in D.workspaces['Layout'].screens[0].areas if p.type == 'VIEW_3D'][0],
+            'screen': D.workspaces['Layout'].screens[0]
+        }
+        bpy.ops.screen.area_split(split_context, direction='VERTICAL', factor=0.3)
 
-    new_area = split_context['screen'].areas[-1]
-    new_area.type = 'TEXT_EDITOR'
+        new_area = split_context['screen'].areas[-1]
+        new_area.type = 'TEXT_EDITOR'
 
-    logger_text = bpy.data.texts.new("log")
-    new_area.spaces[0].text = logger_text
+        logger_text = bpy.data.texts.new("log")
+        new_area.spaces[0].text = logger_text
 
-    # Set logging info to logger text.
+        # Set logging info to logger text.
+        handler = BlenderTextHandler(logger_text)
+        formatter = logging.Formatter('%(asctime)s: %(message)s', datefmt='%m-%d %H:%M')
+        handler.setFormatter(formatter)
+        logging.getLogger('').addHandler(handler)
+
     logging.basicConfig(level=logging.INFO)
-    handler = BlenderTextHandler(logger_text)
-    formatter = logging.Formatter('%(asctime)s: %(message)s', datefmt='%m-%d %H:%M')
-    handler.setFormatter(formatter)
-    logging.getLogger('').addHandler(handler)
     logging.info("Environment Initialized...")
 
 
@@ -378,7 +381,41 @@ if __name__ == '__main__':
 
     register_assets()
     register_style()
-    bpy.utils.register_class(ClientOperator)
-    bpy.utils.register_class(PYCG_OT_host_notify)
 
-    bpy.ops.client.run('INVOKE_DEFAULT')
+    if not bpy.app.background:
+        bpy.utils.register_class(ClientOperator)
+        bpy.utils.register_class(PYCG_OT_host_notify)
+        bpy.ops.client.run('INVOKE_DEFAULT')
+
+    else:
+
+        res_queue = queue.Queue()
+        cmd_queue = queue.Queue()
+        BaseManager.register('res_queue', callable=lambda: res_queue)
+        BaseManager.register('cmd_queue', callable=lambda: cmd_queue)
+        conn_manager = BaseManager(address=('', args.port), authkey=b'pycg.blender')
+        conn_manager.start()
+
+        res_queue = conn_manager.res_queue()
+        cmd_queue = conn_manager.cmd_queue()
+
+        while True:
+            try:
+                new_command = cmd_queue.get_nowait()
+            except queue.Empty:
+                time.sleep(0.1)
+                continue
+            try:
+                res = handle_cmds(new_command)
+            except KeyError as e:
+                logging.error(e)
+                res = {'result': 'failed'}
+            except ConnectionRefusedError as e:
+                try:
+                    conn_manager.shutdown()
+                except ReferenceError:
+                    pass
+                break
+
+            if res is not None:
+                res_queue.put(res)
