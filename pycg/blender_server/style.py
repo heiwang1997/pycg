@@ -110,7 +110,9 @@ def set_origin_material(uuidx):
         output_node = nodes.new(type='ShaderNodeOutputMaterial')
         # Main material attribute
         main_shader_node.inputs["Metallic"].default_value = mesh_attributes.get("material.metallic", 0.0)
-        main_shader_node.inputs["Specular"].default_value = mesh_attributes.get("material.specular", 0.0)
+        if "Specular" in main_shader_node.inputs:
+            # In blender 4.x this attribute is removed.
+            main_shader_node.inputs["Specular"].default_value = mesh_attributes.get("material.specular", 0.0)
         main_shader_node.inputs["Roughness"].default_value = mesh_attributes.get("material.roughness", 0.5)
         # Link nodes
         links.new(input_color_node.outputs[0], main_shader_node.inputs[0])

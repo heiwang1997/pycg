@@ -328,19 +328,35 @@ def init_env():
 
     # Renderer and Color specs
     D.scenes[0].render.engine = 'CYCLES'
-    D.scenes[0].cycles.device = 'GPU'
 
-    # Blender 2.x may not support the full feature set
-    # bpy.context.preferences.addons["cycles"].preferences.compute_device_type = "CUDA"
-
-    # Blender 3 now supports RTX (using OptiX)
-    bpy.context.preferences.addons["cycles"].preferences.compute_device_type = "OPTIX"
+    if not args.no_cuda:
+        D.scenes[0].cycles.device = 'GPU'
+        if args.no_optix:
+            # Blender 2.x may not support the full feature set
+            bpy.context.preferences.addons["cycles"].preferences.compute_device_type = "CUDA"
+        else:
+            # Blender 3 now supports RTX (using OptiX)
+            bpy.context.preferences.addons["cycles"].preferences.compute_device_type = "OPTIX"
 
     # Let blender refresh GPU devices
     bpy.context.preferences.addons["cycles"].preferences.get_devices()
-    for d in bpy.context.preferences.addons["cycles"].preferences.devices:
-        d["use"] = 1  # Using all devices, include GPU and CPU
-        print("Rendering using devices:", d["name"])
+    all_devices = bpy.context.preferences.addons["cycles"].preferences.devices
+
+    if args.no_cuda:
+        for d in all_devices:
+            if d.type == 'CPU':
+                d.use = True
+            else:
+                d.use = False
+    else:
+        for d in all_devices:
+            d.use = True
+    
+    for d in all_devices:
+        if d.use:
+            print("Rendering using devices:", d["name"])
+        else:
+            print("Not using devices:", d["name"])
 
     D.scenes[0].cycles.use_denoising = True
     D.scenes[0].view_settings.view_transform = 'Standard'
@@ -374,6 +390,8 @@ def init_env():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, help='Port to listen on.')
+    parser.add_argument('--no-cuda', action='store_true', help='Use CPU only.')
+    parser.add_argument('--no-optix', action='store_true', help='Use CUDA instead of OptiX.')
     argv = sys.argv[sys.argv.index("--") + 1:]  # get all args after "--"
     args = parser.parse_args(argv)
 
