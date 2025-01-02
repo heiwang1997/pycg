@@ -53,9 +53,25 @@ def rebuild_world_surface():
 
 
 def handle_cmds(msg):
+    """Handle incoming commands from the client.
+    
+    Main command handler that processes different types of commands:
+    - entity: Create geometry objects
+    - camera: Update camera parameters
+    - light: Create/update lights
+    - render: Render scene
+    - clear: Clear scene
+    - etc.
+
+    Args:
+        msg (dict): Command message from client. 'cmd' is the command type, and the following keys are command-specific.
+
+    Returns:
+        dict: Response message to send back to client
+    """
     if msg['cmd'] == 'entity':
         logging.info(f"Command entity: draw {msg['geometry_type']}.")
-        geom_obj = AssetManager.create_entity(msg)
+        geom_obj = AssetManager.create_entity(msg) # will create point cloud or triangle mesh in blender
         geom_obj.rotation_mode = 'QUATERNION'
         geom_obj.rotation_quaternion = msg['pose'][3:]
         geom_obj.location = msg['pose'][:3]
@@ -63,6 +79,7 @@ def handle_cmds(msg):
             'result': 'created',
             'uuid': geom_obj.pycg_asset.uuid
         }
+    
     elif msg['cmd'] == 'clear':
         # Clear assets
         AssetManager.clear_all()
@@ -78,6 +95,7 @@ def handle_cmds(msg):
         output_node = nodes.new(type='ShaderNodeOutputWorld')
         links.new(background_node.outputs[0], output_node.inputs[0])
         return {'result': 'success'}
+    
     elif msg['cmd'] == 'camera':
         cur_scene = bpy.context.scene
         if 'pose' in msg.keys():
@@ -96,11 +114,13 @@ def handle_cmds(msg):
             cur_scene.camera.data.clip_end = 1000.0
 
         return {'result': 'success'}
+    
     elif msg['cmd'] == 'get_entity':
         logging.info(f"Command get_entity: get uuid {msg['uuid']}")
         res = AssetManager.get_entity(msg['uuid'])
         res.update({'result': 'got'})
         return res
+    
     elif msg['cmd'] == 'light':
         light_id = msg.get('uuid', str(uuid.uuid1()))
         light_name = f"Light-{light_id}"
@@ -123,6 +143,7 @@ def handle_cmds(msg):
             'result': 'created',
             'uuid': light_id
         }
+    
     elif msg['cmd'] == 'entity_pose':
         target_object = get_object(msg['uuid'])
         if msg['rotation_mode'] is not None:
@@ -152,6 +173,7 @@ def handle_cmds(msg):
                 cur_scene.camera.keyframe_insert(data_path="location", frame=msg['frame'])
                 cur_scene.camera.keyframe_insert(data_path="rotation_quaternion", frame=msg['frame'])
         return {'result': 'added'}
+    
     elif msg['cmd'] == 'add_animation_fcurve':
         target_object = get_object(msg['uuid'])
         if target_object.animation_data is None:
@@ -236,8 +258,14 @@ def handle_cmds(msg):
 
 
 class ClientOperator(bpy.types.Operator):
-    """
-    Modal operator used to react to
+    """Blender operator that handles client communication.
+    
+    Runs as a modal operator to:
+    1. Listen for incoming commands from client
+    2. Process commands via handle_cmds()
+    3. Send back responses
+    
+    The operator runs continuously until the client detaches.
     """
     bl_idname = "client.run"
     bl_label = "Run pycg Blender Client"
@@ -246,6 +274,11 @@ class ClientOperator(bpy.types.Operator):
     global_res_queue = None
 
     def __init__(self):
+        """Initialize the client operator.
+        
+        Sets up queues for inter-process communication between Blender and the client.
+        Creates a BaseManager instance to manage the shared queues.
+        """
         res_queue = queue.Queue()
         cmd_queue = queue.Queue()
         BaseManager.register('res_queue', callable=lambda: res_queue)
@@ -255,21 +288,46 @@ class ClientOperator(bpy.types.Operator):
         self.cmd_queue = None
 
     def modal(self, context, event):
+        """This function that will keep being run to handle events until it returns {'FINISHED'} or {'CANCELLED'}.
+        Modal operators run every time a new event is detected, such as a mouse click or key press. 
+        Conversely, when no new events are detected, the modal operator will not run. 
+        Modal operators are especially useful for interactive tools, an operator can have its own state 
+        where keys toggle options as the operator runs. Grab, Rotate, Scale, and Fly-Mode are examples of modal operators.
+
+        Operator.invoke is used to initialize the operator as being active by returning {'RUNNING_MODAL'}, initializing the modal loop.
+        
+        Args:
+            context: Blender context
+            event: Current event
+            
+        Returns:
+            set: Operator return state - CANCELLED if reference error occurs
+        """
         try:
             return self._modal(context, event)
         except ReferenceError:
             return {'CANCELLED'}
 
     def _modal(self, context, event):
+        """Internal modal function that handles command processing at every timer event.
+        timer event is set by self._timer = wm.event_timer_add(0.1, window=context.window)
+        
+        Args:
+            context: Blender context
+            event: Current event
+            
+        Returns:
+            set: Operator return state - PASS_THROUGH to keep running, CANCELLED on detach
+        """
         if event.type == 'TIMER':
             try:
                 new_command = self.cmd_queue.get_nowait()
             except queue.Empty:
                 return {'PASS_THROUGH'}
             try:
+                print("The new command is: ", new_command)
                 res = handle_cmds(new_command)
             except KeyError as e:
-                logging.error(e)
                 res = {'result': 'failed'}
             except ConnectionRefusedError as e:
                 try:
@@ -285,6 +343,17 @@ class ClientOperator(bpy.types.Operator):
         return {'PASS_THROUGH'}
 
     def invoke(self, context, event):
+        """Operator.invoke is used to initialize the operator from the context at the moment the operator is called. 
+        invoke() is typically used to assign properties which are then used by execute(). 
+        Some operators don’t have an execute() function, removing the ability to be repeated from a script or macro.
+        
+        Args:
+            context: Blender context
+            event: Current event
+            
+        Returns:
+            set: RUNNING_MODAL to start modal execution
+        """
         self.conn_manager.start()
         self.res_queue = self.conn_manager.res_queue()
         self.cmd_queue = self.conn_manager.cmd_queue()
@@ -292,14 +361,27 @@ class ClientOperator(bpy.types.Operator):
 
         wm = context.window_manager
         self._timer = wm.event_timer_add(0.1, window=context.window)
+
+        # Add a modal handler to the window manager, 
+        # for the given modal operator (called by invoke() with self, just before returning {‘RUNNING_MODAL’})
         wm.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
+
+        return {'RUNNING_MODAL'} 
 
     def cancel(self, context):
+        """Called when the operator is cancelled.
+        
+        Args:
+            context: Blender context
+        """
         pass
 
 
 class PYCG_OT_host_notify(bpy.types.Operator):
+    """Operator to send notifications back to the client.
+    
+    Used to notify the client when certain Blender operations complete.
+    """
     bl_idname = "pycg.host_notify"
     bl_label = "Notify Host"
     bl_description = "Send a notification message to host"
@@ -315,6 +397,16 @@ class PYCG_OT_host_notify(bpy.types.Operator):
 
 
 def init_env():
+    """Initialize the Blender environment.
+    
+    Sets up:
+    - Empty scene
+    - Camera and base object
+    - Cycles render engine
+    - GPU/CPU compute devices
+    - Workspace layout
+    - Logging
+    """
     # Empty scene
     D.meshes.remove(D.meshes["Cube"], do_unlink=True)
     D.lights.remove(D.lights["Light"], do_unlink=True)
@@ -400,13 +492,14 @@ if __name__ == '__main__':
     register_assets()
     register_style()
 
+    # if not the background mode, the server will always run.
     if not bpy.app.background:
         bpy.utils.register_class(ClientOperator)
         bpy.utils.register_class(PYCG_OT_host_notify)
-        bpy.ops.client.run('INVOKE_DEFAULT')
+        bpy.ops.client.run('INVOKE_DEFAULT') # this will call the invoke function in ClientOperator
 
+    # if the background mode, use a while loop to keep the server running.
     else:
-
         res_queue = queue.Queue()
         cmd_queue = queue.Queue()
         BaseManager.register('res_queue', callable=lambda: res_queue)
