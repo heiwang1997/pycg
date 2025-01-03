@@ -42,35 +42,68 @@ def get_epoch_checkpoints(ckpt_base: Path, match_case: str = r"epoch=(\d+)"):
 
 def get_wandb_run(wdb_url: str, wdb_base: str, default_ckpt: str = "all"):
     """
-    wdb_url: str. Can be two formats (See README.md for details):
-        - [wdb:]<USER-NAME>/<PROJ-NAME>/<RUN-ID>[:ckpt-id]
-        - [wdb:]<USER-NAME>/<PROJ-NAME>/<RUN-NAME>[:ckpt-id]
+    Retrieves a Weights & Biases run and its associated checkpoint based on a URL-like identifier.
+    
+    This function parses a W&B URL to locate a specific run and optionally retrieve a checkpoint
+    from that run. It supports both run ID and run name based lookups, with various checkpoint
+    selection modes. 
     Note that for the latter case, multiple runs can be returned and user is prompted to select one.
     If ckpt-id is provided, possible path to the checkpoints will also be provided.
+
+    Args:
+        wdb_url (str): URL-like identifier for the W&B run. Can be in two formats:
+            - [wdb:]<USER-NAME>/<PROJ-NAME>/<RUN-ID>[:ckpt-id]
+            - [wdb:]<USER-NAME>/<PROJ-NAME>/<RUN-NAME>[:ckpt-id]
+        wdb_base (str): Base directory where W&B checkpoints are stored locally
+        default_ckpt (str, optional): Default checkpoint mode if not specified in URL. 
+            Defaults to "all". Valid modes include:
+            - "last": Latest checkpoint
+            - "best"/"epoch": Checkpoint with lowest validation loss
+            - "all": Return checkpoint directory
+            - "test_auto": Automatically determine best checkpoint
+            - "<number>": Specific epoch number
+
+    Returns:
+        tuple: (wandb.Run, Path)
+            - wandb.Run: The retrieved W&B run object
+            - Path: Path to the selected checkpoint file or directory.
+              Returns None if no checkpoint was requested.
+
+    Raises:
+        FileNotFoundError: If the requested checkpoint cannot be found
+        NotImplementedError: If an invalid checkpoint mode is specified
+        AssertionError: If no matching run is found or checkpoint selection fails
     """
+    # Strip 'wdb:' prefix if present
     if wdb_url.startswith("wdb:"):
         wdb_url = wdb_url[4:]
 
+    # Split checkpoint name from URL if present
     if ":" in wdb_url:
         wdb_url, ckpt_name = wdb_url.split(":")
     else:
         ckpt_name = default_ckpt
 
+    # Parse URL components
     wdb_url = wdb_url.split("/")
     user_name = wdb_url[0]
     project_name = wdb_url[1]
     other_name = "/".join(wdb_url[2:])
 
-    # Heuristic to guess user input type.
+    # Try to fetch run - either by ID or by name
     if len(other_name) == 8 and "/" not in other_name and "_" not in other_name and "-" not in other_name:
+        # Looks like a run ID (8 chars, no special characters), just fetch it
         run_id = f"{user_name}/{project_name}/{other_name}"
         wdb_run = wandb.Api().run(run_id)
     else:
+        # Assume it's a run name and search for matches
         all_runs = wandb.Api().runs(
             f"{user_name}/{project_name}",
             filters={"display_name": other_name}
         )
         assert len(all_runs) > 0, f"No run is found for name {other_name}"
+        
+        # Handle multiple matching runs
         sel_idx = 0
         if len(all_runs) > 1:
             print("\nMore than 1 runs found")
@@ -80,12 +113,16 @@ def get_wandb_run(wdb_url: str, wdb_base: str, default_ckpt: str = "all"):
         wdb_run = all_runs[sel_idx]
         print("Target run", wdb_run)
 
+    # Return early if no checkpoint was requested
     if ckpt_name is None:
         return wdb_run, None
 
+    # Construct base path for checkpoints
     ckpt_base = Path(f"{wdb_base}/{wdb_run.project}/{wdb_run.id}/checkpoints/")
 
+    # Handle different checkpoint selection modes
     if ckpt_name == "last":
+        # Check if last checkpoint exists and verify its timestamp
         ckpt_path = ckpt_base / "last.ckpt"
         assert ckpt_path.exists(), f"{ckpt_path} not exist!"
         existing_mtime = os.path.getmtime(ckpt_path)

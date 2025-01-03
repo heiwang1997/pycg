@@ -375,6 +375,12 @@ class InterpType(Enum):
 
 
 class AnimatorBase:
+    """
+    Base class for animators.
+
+    animator is a collection of interpolators for each component. for example,
+    position has x, y, z interpolators, rotation has qx, qy, qz, qw interpolators.
+    """
     def __init__(self):
         self.interpolators = {}
         # For better export-ability
@@ -399,11 +405,21 @@ class AnimatorBase:
         return sorted(set(all_times))
 
     def get_first_t(self):
+        """Get the first time of the animation by checking all interpolators.
+
+        Returns:
+            First time of the animation, or None if no times are available
+        """
         first_t_list = [itp.get_first_t() for itp in self.interpolators.values()]
         first_t_list = [t for t in first_t_list if t is not None]
         return min(first_t_list) if len(first_t_list) > 0 else None
 
     def get_last_t(self):
+        """Get the last time of the animation by checking all interpolators.
+
+        Returns:
+            Last time of the animation, or None if no times are available
+        """
         last_t_list = [itp.get_last_t() for itp in self.interpolators.values()]
         last_t_list = [t for t in last_t_list if t is not None]
         return max(last_t_list) if len(last_t_list) > 0 else None
@@ -444,6 +460,17 @@ class ScalarAnimator(AnimatorBase):
 
 
 class FreePoseAnimator(AnimatorBase):
+    """A class to animate pose (position and rotation) of objects in a scene.
+
+    This class handles interpolation of both position and rotation components of an Isometry pose.
+    For rotation, it supports two interpolation modes:
+        - BLENDER: Interpolates quaternion components separately and renormalizes (matches Blender behavior)
+        - MANIFOLD: Interpolates quaternions directly on the manifold for better linearity
+
+    Args:
+        interp_type: Type of interpolation to use (LINEAR, BEZIER)
+        rotation_type: Type of rotation interpolation (BLENDER or MANIFOLD)
+    """
 
     class RotationType(Enum):
         BLENDER = 0     # separate 4 components of quaternion and re-normalize them afterwards.
@@ -453,10 +480,12 @@ class FreePoseAnimator(AnimatorBase):
         super().__init__()
         self.interp_type = interp_type
         self.rotation_type = rotation_type
+        # Create position interpolators
         if self.interp_type == InterpType.LINEAR:
             self.interp_x = self.add_interpolator('x', LinearInterpolator())
             self.interp_y = self.add_interpolator('y', LinearInterpolator())
             self.interp_z = self.add_interpolator('z', LinearInterpolator())
+            # Create rotation interpolators based on rotation type
             if self.rotation_type == FreePoseAnimator.RotationType.BLENDER:
                 self.interp_qw = self.add_interpolator('qw', LinearInterpolator())
                 self.interp_qx = self.add_interpolator('qx', LinearInterpolator())
@@ -468,6 +497,7 @@ class FreePoseAnimator(AnimatorBase):
             self.interp_x = self.add_interpolator('x', BezierInterpolator())
             self.interp_y = self.add_interpolator('y', BezierInterpolator())
             self.interp_z = self.add_interpolator('z', BezierInterpolator())
+            # Create rotation interpolators based on rotation type
             if self.rotation_type == FreePoseAnimator.RotationType.BLENDER:
                 self.interp_qw = self.add_interpolator('qw', BezierInterpolator())
                 self.interp_qx = self.add_interpolator('qx', BezierInterpolator())
@@ -477,13 +507,21 @@ class FreePoseAnimator(AnimatorBase):
                 self.interp_q = self.add_interpolator('q', SquadQuaternionInterpolator())
 
     def set_keyframe(self, t, value: Isometry):
+        """Set a keyframe for the pose at time t.
+
+        Args:
+            t: Time of the keyframe
+            value: Isometry pose to set at this keyframe
+        """
         assert isinstance(value, Isometry)
         self._precomputed = False
 
+        # Set position keyframes
         self.interp_x.set_keyframe(t, value.t[0])
         self.interp_y.set_keyframe(t, value.t[1])
         self.interp_z.set_keyframe(t, value.t[2])
 
+        # Set rotation keyframes based on rotation type
         if self.rotation_type == FreePoseAnimator.RotationType.BLENDER:
             self.interp_qw.set_keyframe(t, value.q.q[0])
             self.interp_qx.set_keyframe(t, value.q.q[1])
@@ -493,6 +531,10 @@ class FreePoseAnimator(AnimatorBase):
             self.interp_q.set_keyframe(t, value.q)
 
     def precompute(self):
+        """Precompute quaternion flips to ensure shortest path interpolation.
+        
+        This is only needed for BLENDER rotation type.
+        """
         self._precomputed = True
         if self.rotation_type == FreePoseAnimator.RotationType.BLENDER:
             # Flip quaternions to avoid non-closest rotation.
@@ -509,12 +551,24 @@ class FreePoseAnimator(AnimatorBase):
                 self.interp_qz.set_keyframe(time, new_q.q[3])
 
     def get_value(self, t, raw: bool = False):
+        """Get interpolated pose at time t.
+
+        Args:
+            t: Time to evaluate pose at
+            raw: If True, returns raw interpolated values (not implemented)
+
+        Returns:
+            Isometry object representing interpolated pose
+        """
         if not self._precomputed:
             self.precompute()
 
+        # Interpolate position
         new_x = self.interp_x.get_value(t)
         new_y = self.interp_y.get_value(t)
         new_z = self.interp_z.get_value(t)
+
+        # Interpolate rotation based on rotation type
         if self.rotation_type == FreePoseAnimator.RotationType.BLENDER:
             new_qw = self.interp_qw.get_value(t)
             new_qx = self.interp_qx.get_value(t)
@@ -528,14 +582,25 @@ class FreePoseAnimator(AnimatorBase):
         return new_iso
 
     def send_blender(self, uuidx: str):
+        """Send animation data to Blender.
+
+        Handles special case for relative camera which needs quaternion component reordering.
+
+        Args:
+            uuidx: UUID of object to send animation for
+        """
         if not self._precomputed:
             self.precompute()
 
+        # Send position keyframes
         self.interp_x.send_blender(uuidx, 'location', 0)
         self.interp_y.send_blender(uuidx, 'location', 1)
         self.interp_z.send_blender(uuidx, 'location', 2)
+
+        # Send rotation keyframes based on rotation type
         if self.rotation_type == FreePoseAnimator.RotationType.BLENDER:
             if uuidx == "relative_camera":
+                # Special handling for camera rotation
                 self.interp_qx.send_blender(uuidx, 'rotation_quaternion', 0, negate=True)
                 self.interp_qw.send_blender(uuidx, 'rotation_quaternion', 1)
                 self.interp_qz.send_blender(uuidx, 'rotation_quaternion', 2)
@@ -549,6 +614,12 @@ class FreePoseAnimator(AnimatorBase):
             self.interp_q.send_blender(uuidx, 'rotation_quaternion', None)
 
     def export_usd_prim(self, prim, attrib_name: str):
+        """Export animation data to USD primitive.
+
+        Args:
+            prim: USD primitive to export to
+            attrib_name: Name of attribute to export (must be "pose")
+        """
         assert attrib_name == "pose"
 
         # Clear previous transform if exists.
@@ -591,23 +662,63 @@ class SpinPoseAnimator(AnimatorBase):
 
 
 class SceneAnimator:
+    """
+    A class to manage and control animations in a scene.
+    
+    This class handles animation events for various scene elements like cameras, objects, and lights.
+    It maintains a mapping of animation events for each object and attribute, and provides methods
+    to set/get animators and control animation playback.
+
+    The self.events dictionary maps object UUIDs to their animations. For example:
+    {
+        "obj11111111": {
+            "pose": FreePoseAnimator(...),  # Animates object position/rotation
+            "scale": ScalarAnimator(...) # Animates object scale
+            "visible": ScalarAnimator(...) # Animates object visibility
+        },
+        "camera_base": {
+            "relative_camera": FreePoseAnimator(...) # Animates camera base movement
+        },
+        "relative_camera": {
+            "pose": FreePoseAnimator(...) # Animates relative camera (to camera base) movement
+        },
+        "sun": {
+            "pose": FreePoseAnimator(...) # Animates light
+        },
+        "free": {
+            "attrib_name": FreePoseAnimator(...) # Executes arbitrary commands at keyframes
+        }
+    }
+
+    Args:
+        scene: The scene object that this animator will control
+    """
     def __init__(self, scene):
         self.scene = scene
         # uuid -> attributes -> animator
-        #   or 'free' -> 'command' -> animator
+        #   or 'free' -> 'command' -> animator  
         self.events = defaultdict(dict)
         self.current_frame = 0
 
+        # Frame range for the animation
         self._start_frame = 0
         self._end_frame = 0
 
     def is_enabled(self):
+        """Check if animation is enabled by verifying frame range."""
         s, e = self.get_range()
         return s < e
 
     def get_range(self):
+        """
+        Calculate and return the frame range for all animations.
+        
+        Returns:
+            tuple: (start_frame, end_frame) containing the full frame range
+        """
         frame_max = self._end_frame
         frame_min = self._start_frame
+        # Find min/max frames across all animators
         for obj_attrib in self.events.values():
             for obj_interp in obj_attrib.values():
                 cur_first, cur_last = obj_interp.get_first_t(), obj_interp.get_last_t()
@@ -620,17 +731,27 @@ class SceneAnimator:
         return frame_min, frame_max
 
     def set_range(self, start_frame, end_frame):
+        """
+        Set the animation frame range and validate against actual keyframe range.
+        
+        Args:
+            start_frame: Starting frame number
+            end_frame: Ending frame number
+        """
         self._start_frame, self._end_frame = start_frame, end_frame
-        self.get_range()
+        self.get_range() 
+        # Warn if the provided range is not set accurately.
         if self._start_frame != start_frame:
             print(f"Warning (set_range): {self._start_frame} vs. {start_frame}!")
         if self._end_frame != end_frame:
             print(f"Warning (set_range): {self._end_frame} vs. {end_frame}!")
 
     def send_blender(self):
+        """Send animation data to Blender."""
         s, e = self.get_range()
         blender.send_eval(f"bpy.context.scene.frame_start={s}")
         blender.send_eval(f"bpy.context.scene.frame_end={e}")
+        # Send each animator's data
         for obj_uuid, obj_attribs in self.events.items():
             for attrib_name, attrib_interp in obj_attribs.items():
                 attrib_interp.send_blender(obj_uuid)
@@ -654,83 +775,178 @@ class SceneAnimator:
                 attrib_interp.export_usd_prim(usd_prim, attrib_name)
 
     def import_usd(self):
+        """Import animation data from USD (Not implemented)."""
         pass
 
     def set_frame(self, t):
+        """
+        Set all objects in the scene to a specific animation frame. 
+        
+        Args:
+            t: Frame number to set
+        """
+        # Apply each animator's value to the scene at frame t
         for obj_uuid, obj_attribs in self.events.items():
             for attrib_name, attrib_interp in obj_attribs.items():
                 if attrib_interp.get_first_t() is None:
                     continue
                 attrib_val = attrib_interp.get_value(t)
+                # Handle different object types
                 if obj_uuid == "relative_camera":
                     if attrib_name == "pose":
                         self.scene.relative_camera_pose = attrib_val
                     else:
                         raise NotImplementedError
+                    
                 elif obj_uuid == "camera_base":
                     self.scene.camera_base = attrib_val
+
                 elif obj_uuid == "free":
                     eval(f"self.scene.{attrib_name} = attrib_val")
+
                 elif attrib_name == "pose":
                     if obj_uuid in self.scene.objects.keys():
                         self.scene.objects[obj_uuid].pose = attrib_val
                     if obj_uuid in self.scene.lights.keys():
                         self.scene.lights[obj_uuid].pose = attrib_val
+
                 elif attrib_name == "scale":
                     self.scene.objects[obj_uuid].scale = attrib_val
+
                 elif attrib_name == "visible":
                     self.scene.objects[obj_uuid].visible = attrib_val
+                    
         self.current_frame = t
 
     def set_current_frame(self):
+        """Set scene to current frame."""
         self.set_frame(self.current_frame)
-
+        
     def get_animator(self, obj_idx, attr_idx):
+        """Get animator for a specific object and attribute.
+
+        Args:
+            obj_idx: Object identifier/name, e.g. "obj11111111"
+            attr_idx: Attribute identifier/name, e.g. "pose"
+
+        Returns:
+            Animator instance if found, None otherwise
+        """
         try:
             return self.events[obj_idx][attr_idx]
         except KeyError:
             return None
 
     def set_relative_camera(self, animator, no_override: bool = False):
+        """Set animator for relative camera pose.
+
+        Args:
+            animator: Animator instance to control camera pose
+            no_override: If True, won't override existing animator
+        """
         if self.get_relative_camera() is not None and no_override:
             return
         self.events["relative_camera"]["pose"] = animator
 
     def get_relative_camera(self):
+        """Get animator for relative camera pose.
+
+        Returns:
+            Animator instance controlling relative camera pose
+        """
         return self.get_animator("relative_camera", "pose")
 
     def set_camera_base(self, animator, no_override: bool = False):
+        """Set animator for camera base pose.
+
+        Args:
+            animator: Animator instance to control camera base pose
+            no_override: If True, won't override existing animator
+        """
         if self.get_camera_base() is not None and no_override:
             return
         self.events["camera_base"]["pose"] = animator
 
     def get_camera_base(self):
+        """Get animator for camera base pose.
+
+        Returns:
+            Animator instance controlling camera base pose
+        """
         return self.get_animator("camera_base", "pose")
 
     def set_object_pose(self, obj_uuid: str, animator):
-        assert obj_uuid in self.scene.objects.keys()
+        """Set animator for object pose.
+
+        Args:
+            obj_uuid: Object identifier/name
+            animator: Animator instance to control object pose
+        """
+        assert obj_uuid in self.scene.objects.keys()  # Verify object exists
         self.events[obj_uuid]["pose"] = animator
 
     def set_object_scale(self, obj_uuid: str, animator):
-        assert obj_uuid in self.scene.objects.keys()
+        """Set animator for object scale.
+
+        Args:
+            obj_uuid: Object identifier/name
+            animator: Animator instance to control object scale
+        """
+        assert obj_uuid in self.scene.objects.keys()  # Verify object exists
         self.events[obj_uuid]["scale"] = animator
 
     def set_object_visibility(self, obj_uuid: str, animator):
-        assert obj_uuid in self.scene.objects.keys()
+        """Set animator for object visibility.
+
+        Args:
+            obj_uuid: Object identifier/name
+            animator: Animator instance to control object visibility
+        """
+        assert obj_uuid in self.scene.objects.keys()  # Verify object exists
         self.events[obj_uuid]["visible"] = animator
 
     def set_light_pose(self, light_name: str, animator):
-        assert light_name in self.scene.lights.keys()
+        """Set animator for light pose.
+
+        Args:
+            light_name: Light identifier/name
+            animator: Animator instance to control light pose
+        """
+        assert light_name in self.scene.lights.keys()  # Verify light exists
         self.events[light_name]["pose"] = animator
 
-    def set_sun_pose(self, animator):
-        self.set_light_pose('sun', animator)
+    def set_sun_pose(self, animator, sun_name: str = 'sun'):
+        """Set animator for sun light pose.
+
+        Args:
+            animator: Animator instance to control sun light pose
+        """
+        self.set_light_pose(sun_name, animator)
 
     def get_light_pose(self, light_name):
+        """Get animator for light pose.
+
+        Args:
+            light_name: Light identifier/name
+
+        Returns:
+            Animator instance controlling light pose
+        """
         return self.get_animator(light_name, "pose")
 
     def get_sun_pose(self):
+        """Get animator for sun light pose.
+
+        Returns:
+            Animator instance controlling sun light pose
+        """
         return self.get_light_pose('sun')
 
     def set_free_command(self, command: str, animator):
+        """Set animator for arbitrary scene command.
+
+        Args:
+            command: Command string to animate, evaluated as self.scene.command
+            animator: Animator instance to control command
+        """
         self.events['free'][command] = animator

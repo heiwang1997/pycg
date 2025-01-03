@@ -102,6 +102,22 @@ _void_color = [0.0, 0.0, 0.0]
 
 
 def set_void_color(color=None):
+    """
+    Sets the void color used in the application.
+
+    The void color is a global RGB color value that represents empty or undefined areas.
+    This function updates the void color with the specified RGB values.
+
+    Args:
+        color (list or tuple, optional): A 3-dimensional RGB color value to set as the void color.
+            Each component should be in the range [0, 1]. If None, the void color remains unchanged.
+
+    Returns:
+        None: The function modifies the global _void_color variable in-place.
+
+    Raises:
+        AssertionError: If the input color is not 3-dimensional.
+    """
     assert len(color) == 3, "Color must be 3-dimensional!"
     _void_color[0] = color[0]
     _void_color[1] = color[1]
@@ -109,11 +125,42 @@ def set_void_color(color=None):
 
 
 def shuffle_custom_cmaps(seed: int = 0):
+    """
+    Shuffles the color order in all custom colormaps defined in ADDITIONAL_CMAPS.
+
+    This function applies a random permutation to the color sequences of each custom colormap
+    while maintaining the same set of colors. The shuffling is deterministic based on the provided seed.
+
+    Args:
+        seed (int, optional): Random seed for the permutation. Defaults to 0, which ensures
+            reproducible shuffling results.
+
+    Returns:
+        None: The function modifies the colormaps in-place in the ADDITIONAL_CMAPS dictionary.
+    """
     for cmap in ADDITIONAL_CMAPS.values():
         cmap[:, ] = cmap[np.random.RandomState(seed).permutation(cmap.shape[0])]
 
 
 def get_cmap_array(cmap: str):
+    """
+    Retrieves and processes a colormap array based on the specified colormap name and optional processor.
+
+    This function supports both built-in matplotlib colormaps and custom colormaps defined in ADDITIONAL_CMAPS.
+    It also allows for post-processing of the colormap through various processors specified after '@' in the cmap string.
+
+    Args:
+        cmap (str): The colormap name, optionally followed by '@' and a processor name.
+            Format: "colormap_name[@processor_name]"
+            Supported processors: "shuffle", "double-lighter", "double-darker"
+
+    Returns:
+        np.ndarray: A numpy array of shape (N, 3) containing RGB color values from the colormap.
+            The array may be modified based on the specified processor.
+
+    Raises:
+        NotImplementedError: If an unknown processor is specified.
+    """
     if "@" in cmap:
         cmap, cmap_processor = cmap.split("@")
     else:
@@ -140,6 +187,18 @@ def get_cmap_array(cmap: str):
 
 
 def map_quantized_color(cid: Union[int, np.ndarray], cmap: str = 'tab10'):
+    """
+    Maps quantized color IDs to RGB colors using a specified colormap.
+
+    Args:
+        cid (Union[int, np.ndarray]): Color ID(s) to map. Can be a single integer or numpy array of integers.
+        cmap (str, optional): Name of the colormap to use. Defaults to 'tab10'.
+
+    Returns:
+        Union[np.ndarray, List[float]]: Mapped RGB color(s). Returns a single RGB list if input is a single integer,
+            or a numpy array of RGB colors if input is an array. Negative IDs are mapped to the void color,
+            and IDs larger than the colormap size are wrapped around using modulo operation.
+    """
     color_map = get_cmap_array(cmap)
 
     single_value = False
@@ -156,7 +215,21 @@ def map_quantized_color(cid: Union[int, np.ndarray], cmap: str = 'tab10'):
 
 
 def map_continuous_color(value: Union[float, np.ndarray], cmap: str = 'viridis'):
+    """
+    Maps continuous values to RGBA colors using a specified colormap.
 
+    This function takes a continuous value or array of values between 0 and 1 and maps them to colors
+    from a specified matplotlib colormap. Values are clipped to the range [0, 1] before mapping.
+
+    Args:
+        value (Union[float, np.ndarray]): Input value(s) to map to colors. Can be a single float or numpy array of floats.
+        cmap (str, optional): Name of the matplotlib colormap to use. Defaults to 'viridis'.
+
+    Returns:
+        Union[np.ndarray, List[float]]: Mapped RGBA color(s). Returns a single RGBA list if input is a single float,
+            or a numpy array of RGBA colors if input is an array. Each color is in the format [R, G, B, A] with
+            values in the range [0, 1].
+    """
     single_value = False
     if isinstance(value, float) or isinstance(value, np.float64):
         value = np.full((1, ), value, dtype=float)

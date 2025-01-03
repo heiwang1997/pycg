@@ -29,6 +29,7 @@ import inspect
 import logging
 from rich.logging import RichHandler
 
+ArgumentParser = argparse.ArgumentParser
 
 # if 'MEM_PROFILE' in os.environ.keys():
 #     from pytorch_memlab.line_profiler.profile import global_line_profiler
@@ -56,75 +57,144 @@ class ConsoleColor:
 
 def parse_config_json(json_path: Path, args: argparse.Namespace = None):
     """
-    Parse a json file and add key:value to args namespace.
-    Json file format [ {attr}, {attr}, ... ]
-        {attr} = { "_": COMMENT, VAR_NAME: VAR_VALUE }
+    Parses a JSON configuration file and merges its contents into an argparse Namespace object.
+
+    This function reads a JSON file containing configuration parameters, processes the data,
+    and adds the key-value pairs to the provided Namespace object. The JSON file can contain
+    comments marked with "_" key, which will be ignored. The function also handles common
+    JSON formatting issues by automatically converting Python-style strings and booleans to
+    valid JSON format.
+
+    Args:
+        json_path (Path): Path object pointing to the JSON configuration file to be parsed.
+        args (argparse.Namespace, optional): Existing Namespace object to which the configuration
+            will be added. If None, a new Namespace object will be created. Defaults to None.
+
+    Returns:
+        argparse.Namespace: The updated Namespace object containing the merged configuration.
+            If the input args was None, returns a new Namespace object with the configuration.
+
+    Notes:
+        - The JSON content should be a list, including several key-value paired dict
+        - Each dictionary can contain a special key "_" for comments, which will be ignored.
+        - The function automatically handles common JSON formatting issues:
+            * Converts single quotes to double quotes
+            * Converts Python None to JSON null
+            * Converts Python True/False to JSON true/false
     """
+    # Initialize args if not provided
     if args is None:
         args = argparse.Namespace()
 
+    # Read and parse JSON file
     with json_path.open() as f:
         json_text = f.read()
 
+    # Attempt to parse JSON, with fallback for common formatting issues
     try:
         raw_configs = json.loads(json_text)
-    except:
-        # Do some fixing of the json text
-        json_text = json_text.replace("\'", "\"")
-        json_text = json_text.replace("None", "null")
-        json_text = json_text.replace("False", "false")
-        json_text = json_text.replace("True", "true")
+    except json.JSONDecodeError:
+        # Fix common JSON formatting issues
+        json_text = (
+            json_text.replace("\'", "\"")
+                    .replace("None", "null")
+                    .replace("False", "false")
+                    .replace("True", "true")
+        )
         raw_configs = json.loads(json_text)
 
+    # Ensure raw_configs is a list
     if isinstance(raw_configs, dict):
         raw_configs = [raw_configs]
+
+    # Process and merge configurations
     configs = {}
     for raw_config in raw_configs:
         for rkey, rvalue in raw_config.items():
-            if rkey != "_":
+            if rkey != "_":  # Skip comment keys
                 configs[rkey] = rvalue
 
+    # Update args with configurations
     if configs is not None:
         for ckey, cvalue in configs.items():
             args.__dict__[ckey] = cvalue
+
     return args
 
 
 def parse_config_yaml(yaml_path: Path, args: Union[argparse.Namespace, OmegaConf] = None,
                       override: bool = True, additional_includes: list = None) -> OmegaConf:
+    """
+    Parses and merges YAML configuration files into a unified OmegaConf configuration.
+
+    This function handles hierarchical configuration by processing included YAML files,
+    assignment directives, and merging with existing arguments. It supports both argparse.Namespace
+    and OmegaConf input types, and allows for control over merge precedence.
+
+    Args:
+        yaml_path (Path): Path to the main YAML configuration file.
+        args (Union[argparse.Namespace, OmegaConf], optional): Existing configuration to merge with.
+            Can be either argparse.Namespace or OmegaConf. Defaults to None.
+        override (bool, optional): Determines merge precedence. If True, YAML configs override
+            existing args. If False, existing args override YAML configs. Defaults to True.
+        additional_includes (list, optional): Additional YAML files to include in the configuration.
+            These are processed after the main YAML's include_configs. Defaults to None.
+
+    Returns:
+        OmegaConf: Merged configuration object containing all settings from the YAML files
+            and input arguments.
+
+    Notes:
+        - "include_configs" key in the main YAML file can specify additional YAML files to include.
+        - "assign" key in the main YAML file can specify dotlist, e.g.
+            "assign": {
+                "model.depth": 101,  # Override depth
+                "model.pretrained": True  # Add new parameter
+            }
+    """
+    # Initialize empty OmegaConf if no args provided
     if args is None:
         args = OmegaConf.create()
+    
+    # Convert argparse.Namespace to OmegaConf if needed
     if isinstance(args, argparse.Namespace):
         args = OmegaConf.create(args.__dict__)
 
+    # Load main YAML configuration
     configs = OmegaConf.load(yaml_path)
     has_include = "include_configs" in configs
 
+    # Process included configurations
     if has_include or additional_includes is not None:
         base_config_paths = []
 
+        # Handle include_configs from main YAML
         if has_include:
             ic_configs = configs["include_configs"]
-            del configs["include_configs"]
+            del configs["include_configs"]  # Remove include_configs after processing
             if isinstance(ic_configs, str):
                 ic_configs = [ic_configs]
             base_config_paths += [yaml_path.parent / Path(t) for t in ic_configs]
 
+        # Add additional includes if specified
         if additional_includes is not None:
             base_config_paths += [Path(t) for t in additional_includes]
 
-        # Update the config from top to down.
+        # Recursively process and merge included configs
         base_cfg = OmegaConf.create()
         for base_config_path in base_config_paths:
             base_cfg = parse_config_yaml(base_config_path, base_cfg)
         configs = OmegaConf.merge(base_cfg, configs)
 
+    # Process assignment directives.
     if "assign" in configs:
         overlays = configs["assign"]
-        del configs["assign"]
+        del configs["assign"]  # Remove assign after processing
+        # Convert assignment dict to OmegaConf dotlist format
         assign_config = OmegaConf.from_dotlist([f"{k}={v}" for k, v in overlays.items()])
         configs = OmegaConf.merge(configs, assign_config)
 
+    # Merge with input args based on override preference, the later override the former
     if override:
         return OmegaConf.merge(args, configs)
     else:
@@ -132,22 +202,60 @@ def parse_config_yaml(yaml_path: Path, args: Union[argparse.Namespace, OmegaConf
 
 
 def dict_to_args(data, recursive: bool = False):
+    """
+    Converts a dictionary or Namespace object into an argparse.Namespace object.
+
+    This function is useful for converting configuration dictionaries or existing Namespace objects
+    into a format compatible with argparse-based argument handling. It supports recursive conversion
+    of nested dictionaries when the recursive flag is set to True.
+
+    Args:
+        data (Union[dict, argparse.Namespace]): Input data to convert. Can be either a dictionary
+            or an argparse.Namespace object.
+        recursive (bool, optional): If True, recursively converts nested dictionaries into
+            Namespace objects. Defaults to False.
+
+    Returns:
+        argparse.Namespace: A Namespace object containing all the key-value pairs from the input data.
+            Nested dictionaries are converted to Namespace objects if recursive is True.
+    """
+    # Initialize empty Namespace object
     args = argparse.Namespace()
+    
+    # Handle Namespace input by converting to dictionary
     if hasattr(data, '__dict__'):
-        # This enables us to also process namespace.
+        # This enables us to also process namespace objects
         data = data.__dict__
+    
+    # Process each key-value pair in the input data
     for ckey, cvalue in data.items():
-        if recursive:
-            if isinstance(cvalue, dict):
-                cvalue = dict_to_args(cvalue, recursive)
+        # Handle recursive conversion of nested dictionaries
+        if recursive and isinstance(cvalue, dict):
+            cvalue = dict_to_args(cvalue, recursive)
+        
+        # Add the processed value to the Namespace object
         args.__dict__[ckey] = cvalue
+    
     return args
 
 
-ArgumentParser = argparse.ArgumentParser
-
 
 class ArgumentParserX(ArgumentParser):
+    """
+    Extended ArgumentParser class that supports configuration files and dynamic argument handling.
+
+    This class enhances the standard ArgumentParser by:
+    - Supporting YAML/JSON configuration files as input
+    - Allowing dynamic argument addition based on configuration files
+    - Providing execution of Python code to modify arguments
+    - Converting arguments to OmegaConf configuration objects
+
+    Args:
+        base_config_path (str, optional): Path to base configuration file. Defaults to None.
+        add_hyper_arg (bool, optional): Whether to add 'hyper' argument for config file path. Defaults to True.
+        to_oconf (bool, optional): Whether to convert arguments to OmegaConf object. Defaults to True.
+        **kwargs: Additional arguments passed to parent ArgumentParser.
+    """
     def __init__(self, base_config_path=None, add_hyper_arg=True, to_oconf=True, **kwargs):
         super().__init__(**kwargs)
         self.add_hyper_arg = add_hyper_arg
@@ -160,6 +268,18 @@ class ArgumentParserX(ArgumentParser):
 
     @staticmethod
     def str2bool(v):
+        """
+        Convert string to boolean value.
+
+        Args:
+            v (str or bool): Input value to convert
+
+        Returns:
+            bool: Converted boolean value
+
+        Raises:
+            argparse.ArgumentError: If input cannot be converted to boolean
+        """
         if isinstance(v, bool):
             return v
         if v.lower() in ('yes', 'true', 't', 'y', '1'):
@@ -170,22 +290,43 @@ class ArgumentParserX(ArgumentParser):
             raise argparse.ArgumentError('Boolean value expected.')
 
     def parse_args(self, args=None, namespace=None, additional_args=None):
-        # Parse arg for the first time to extract args defined in program.
+        """
+        Parse arguments with extended functionality.
+
+        Args:
+            args (list, optional): Argument list to parse. Defaults to None.
+            namespace (Namespace, optional): Namespace object to store results. Defaults to None.
+            additional_args (dict, optional): Additional arguments to merge. Defaults to None.
+
+        Returns:
+            Union[Namespace, DictConfig]: Parsed arguments, either as Namespace or OmegaConf DictConfig
+        """
+        # First pass to get basic arguments including config file path
         _args = self.parse_known_args(args, namespace)[0]
-        # Add the types needed.
+        
+        # Initialize configuration container
         file_args = OmegaConf.create()
+        
+        # Load base configuration if specified
         if self.base_config_path is not None:
             file_args = parse_config_yaml(Path(self.base_config_path), file_args)
+            
+        # Merge with additional arguments if provided
         if additional_args is not None:
             file_args = OmegaConf.merge(file_args, additional_args)
+            
+        # Load hyperparameters from specified config file
         if self.add_hyper_arg and _args.hyper != "none":
             if _args.hyper.endswith("json"):
                 file_args = parse_config_json(Path(_args.hyper), file_args)
             else:
                 file_args = parse_config_yaml(Path(_args.hyper), file_args, additional_includes=_args.include)
+                
+        # Dynamically add arguments based on configuration
         for ckey, cvalue in file_args.items():
             try:
                 if isinstance(cvalue, bool):
+                    # Special handling for boolean arguments
                     self.add_argument(*(["--" + ckey] if ckey != "visualize" else ['-v', '--' + ckey]),
                                       type=ArgumentParserX.str2bool, nargs='?',
                                       const=True, default=cvalue)
@@ -193,11 +334,15 @@ class ArgumentParserX(ArgumentParser):
                     self.add_argument('--' + ckey, type=type(cvalue), default=cvalue, required=False)
             except argparse.ArgumentError:
                 continue
-        # Parse args fully to extract all useful information
+                
+        # Final parsing with all arguments
         _args = super().parse_args(args, namespace)
+        
+        # Convert to OmegaConf if requested
         if self.to_oconf:
             _args = OmegaConf.create(_args.__dict__)
-        # After that, execute exec part.
+            
+        # Execute any modification commands
         exec_code = _args.exec
         if exec_code is not None:
             for exec_cmd in exec_code:
@@ -205,30 +350,56 @@ class ArgumentParserX(ArgumentParser):
                 try:
                     exec(exec_cmd)
                 except Exception as e:
+                    # Fallback for string assignment
                     lhs, rhs = exec_cmd.split('=')
                     exec_cmd = lhs + "='" + rhs + "'"
                     logger.warning(f"CMD boosted: {exec_cmd}")
                     exec(exec_cmd)
         return _args
 
-
 class TorchLossMeter:
     """
-    Weighted loss calculator, for tracing all the losses generated and print them.
+    A weighted loss calculator for tracking and printing multiple losses in PyTorch.
+    
+    This class maintains a dictionary of named losses with associated weights,
+    allowing for weighted combinations of multiple loss terms. It provides
+    functionality to add losses, compute weighted sums, and display loss values.
+
+    The class handles both scalar Tensor and numeric loss values, with validation
+    to ensure proper loss shapes and detect NaN values.
     """
     def __init__(self):
+        """Initialize an empty loss dictionary."""
         self.loss_dict = {}
 
     def add_loss(self, name, loss, weight=1.0):
+        """
+        Add a new loss term with an optional weight.
+
+        Args:
+            name (str): Unique identifier for this loss term
+            loss (Tensor or float): The loss value to add
+            weight (float, optional): Weight multiplier for this loss. Defaults to 1.0.
+                If weight is 0.0, the loss is ignored.
+        """
         if weight == 0.0:
             return
+        # Check if loss is a PyTorch tensor and validate its shape
         if hasattr(loss, "numel"):
             assert loss.numel() == 1, f"Loss must contains only one item, instead of {loss.numel()}."
+        # Ensure no duplicate loss names
         assert name not in self.loss_dict.items(), f"{name} already in loss!"
         self.loss_dict[name] = (weight, loss)
 
     def get_sum(self):
+        """
+        Calculate the weighted sum of all losses.
+
+        Returns:
+            Tensor or float: The weighted sum of all losses
+        """
         import torch
+        # Check for NaN values in losses
         for n, (w, l) in self.loss_dict.items():
             if isinstance(l, torch.Tensor) and torch.isnan(l):
                 print(f"Warning: Loss {n} with weight {w} has NaN loss!")
@@ -239,11 +410,22 @@ class TorchLossMeter:
         return sum(sum_arr)
 
     def items(self):
-        # Standard iterator
+        """
+        Iterator over weighted loss values.
+
+        Yields:
+            tuple: (loss_name, weighted_loss_value) pairs
+        """
         for n, (w, l) in self.loss_dict.items():
             yield n, w * l
 
     def __repr__(self):
+        """
+        Generate a formatted string representation of all losses.
+
+        Returns:
+            str: Multi-line string showing each loss term and the total
+        """
         text = "TorchLossMeter:\n"
         for n, (w, l) in self.loss_dict.items():
             text += "   + %s: \t %.2f * %.4f = \t %.4f\n" % (n, w, l, w * l)
@@ -251,6 +433,15 @@ class TorchLossMeter:
         return text
 
     def __getitem__(self, item):
+        """
+        Get the weighted value of a specific loss term.
+
+        Args:
+            item (str): Name of the loss term
+
+        Returns:
+            Tensor or float: The weighted loss value
+        """
         w, l = self.loss_dict[item]
         return w * l
 

@@ -3,7 +3,6 @@ from pycg import o3d
 from pycg.isometry import Isometry
 
 
-
 class CameraIntrinsic:
     """
     A notice on Perspective/Orthogonal Projection.

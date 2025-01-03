@@ -9,13 +9,14 @@ from pycg import o3d
 import matplotlib.colors
 import matplotlib.cm
 import math
+import torch
 
 from pycg.isometry import Isometry, BoundingBox
 from pycg.color import map_quantized_color
 from pycg.exp import logger
 from pyquaternion import Quaternion
 from pathlib import Path
-from typing import List, Dict, Tuple, Union, Iterable
+from typing import List, Dict, Tuple, Union, Iterable, Optional
 
 
 try:
@@ -73,9 +74,27 @@ class AnnotatedGeometry:
 
 
 def convert_to_pickable(geom_obj):
+    """Convert an Open3D geometry object to a pickable dictionary format.
+    
+    This function converts Open3D geometry objects (PointCloud, LineSet, TriangleMesh) into a 
+    dictionary format that can be easily serialized/pickled. The conversion is done based on 
+    the SERIALIZE_PROTO definitions.
+
+    Args:
+        geom_obj: An Open3D geometry object (PointCloud, LineSet, or TriangleMesh)
+
+    Returns:
+        dict: A dictionary containing the geometry type and its attributes as numpy arrays
+        
+    Raises:
+        NotImplementedError: If the geometry type is not supported in SERIALIZE_PROTO
+    """
+    # Iterate through supported geometry types
     for type_name, type_def in SERIALIZE_PROTO.items():
         if isinstance(geom_obj, type_def["class"]):
+            # Create dict with geometry type
             desc = {"type": type_name}
+            # Convert each attribute to numpy array if it exists
             for attr in type_def["attributes"]:
                 attr_val = getattr(geom_obj, attr)
                 if attr_val is not None:
@@ -85,11 +104,28 @@ def convert_to_pickable(geom_obj):
 
 
 def convert_from_pickable(geom_obj: dict):
+    """Convert a pickable dictionary back to an Open3D geometry object.
+    
+    This function converts a dictionary containing geometry data back into the corresponding
+    Open3D geometry object. The conversion is done based on the SERIALIZE_PROTO definitions.
+
+    Args:
+        geom_obj (dict): Dictionary containing geometry type and attributes as numpy arrays
+
+    Returns:
+        Open3D geometry object (PointCloud, LineSet, or TriangleMesh)
+        
+    Raises:
+        AssertionError: If input is not a dict or geometry type is not supported
+    """
     assert isinstance(geom_obj, dict)
     assert geom_obj["type"] in SERIALIZE_PROTO.keys()
 
+    # Get the geometry type definition
     geom_type_def = SERIALIZE_PROTO[geom_obj['type']]
+    # Create new geometry object
     geom = geom_type_def['class']()
+    # Set each attribute using the corresponding creator method
     for attr_name, attr_creator in zip(geom_type_def["attributes"], geom_type_def["methods"]):
         if attr_name in geom_obj.keys():
             setattr(geom, attr_name, attr_creator(geom_obj[attr_name]))
@@ -97,30 +133,64 @@ def convert_from_pickable(geom_obj: dict):
     return geom
 
 
-def ensure_from_torch(arr, dim: int = 2, remove_batch_dim: bool = True):
+def ensure_from_torch(arr: Union[torch.Tensor, list, np.ndarray], dim: int = 2, remove_batch_dim: bool = True):
+    """Convert input array to numpy array with specified dimensions.
+    
+    This function handles conversion of PyTorch tensors, lists, and numpy arrays to a numpy array
+    with the specified number of dimensions. For PyTorch tensors, it can optionally handle batch dimensions.
+
+    Args:
+        arr (Union[torch.Tensor, list, np.ndarray]): Input array to convert
+        dim (int, optional): Expected number of dimensions for output array. Defaults to 2.
+        remove_batch_dim (bool, optional): Whether to handle batch dimension for PyTorch tensors. 
+            If True, will extract first batch if batch dimension exists. Defaults to True.
+
+    Returns:
+        np.ndarray: Converted numpy array with specified dimensions
+
+    Raises:
+        AssertionError: If input tensor dimensions don't match expected dimensions
+    """
+    # Handle PyTorch tensor conversion
     if hasattr(arr, "device"):
         if remove_batch_dim:
+            # Check dimensions accounting for optional batch dim
             assert dim <= arr.ndim <= dim + 1, f"Torch tensor has dimension {arr.ndim} which is incorrect!"
             if arr.ndim == dim + 1:
                 if arr.size(0) > 1:
                     print(f"Warning: input array is a torch tensor with batch dimension and batch size is {arr.size(0)}."
                           f"We only retrieve the first batch.")
-                arr = arr[0]
+                arr = arr[0]  # Extract first batch
         else:
+            # Strict dimension check when not handling batch dim
             assert arr.ndim == dim, f"Torch tensor has dimension {arr.ndim}, should be {dim}!"
         arr = arr.detach().cpu().numpy()
+    # Handle list conversion    
     elif isinstance(arr, list):
         arr = np.asarray(arr)
+    
     assert isinstance(arr, np.ndarray)
+    
+    # Handle array dimensions
     if remove_batch_dim:
         if arr.ndim == dim - 1:
-            arr = arr[None, ...]
+            arr = arr[None, ...]  # Add batch dimension if missing
     else:
         assert arr.ndim == dim
+        
     return arr
 
 
 def subset_pointcloud(pcd: o3d.geometry.PointCloud, inds: np.ndarray):
+    """Create new point cloud containing subset of points specified by indices.
+    
+    Args:
+        pcd (o3d.geometry.PointCloud): Input point cloud
+        inds (np.ndarray): Array of indices specifying which points to keep
+
+    Returns:
+        o3d.geometry.PointCloud: New point cloud containing only specified points
+    """
     new_pcd = o3d.geometry.PointCloud()
     if pcd.has_points():
         new_pcd.points = o3d.utility.Vector3dVector(np.asarray(pcd.points)[inds])
@@ -132,12 +202,32 @@ def subset_pointcloud(pcd: o3d.geometry.PointCloud, inds: np.ndarray):
 
 
 def transparent(geom, alpha: float = 0.5):
+    """Create transparent version of input geometry by setting alpha value.
+    
+    Args:
+        geom (Union[o3d.geometry.TriangleMesh, o3d.geometry.PointCloud, o3d.geometry.LineSet]): Input geometry
+        alpha (float, optional): Transparency value between 0 and 1. Defaults to 0.5.
+
+    Returns:
+        AnnotatedGeometry: Geometry with transparency attribute set
+    """
     my_geom = AnnotatedGeometry(geom, None)
     my_geom.attributes["alpha"] = alpha
     return my_geom
 
 
-def text(text: str, pos, is_mesh: bool = False, text_height: float = 0.2):
+def text(text: str, pos: Union[list, np.ndarray], is_mesh: bool = False, text_height: float = 0.2):
+    """Create 3D text geometry either as mesh or point cloud.
+    
+    Args:
+        text (str): Text content to display
+        pos (Union[list, np.ndarray]): 3D position for text placement
+        is_mesh (bool, optional): Whether to create text as mesh or point cloud. Defaults to False.
+        text_height (float, optional): Height of text in world units. Defaults to 0.2.
+
+    Returns:
+        Union[o3d.geometry.TriangleMesh, AnnotatedGeometry of o3d.geometry.PointCloud]: Text geometry as either mesh or annotated point cloud
+    """
     if is_mesh:
         # Default height is 16x16 pixels
         text_mesh = o3d.t.geometry.TriangleMesh.create_text(text, depth=1).to_legacy()
@@ -243,10 +333,44 @@ def layout_entities(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None
     return all_identities, flattened_names
 
 
-def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout=None, margin=1.0,
-            x_labels=None, y_labels=None, z_labels=None, show=True, use_new_api=False, group_names=None, cam_path=None,
-            key_bindings=None, separate_windows=True, point_size=5.0, scale=1.0, default_camera_kwargs=None,
-            viewport_shading='LIT', auto_plane=False, up_axis="+Y", polyscope: bool = False):
+def show_3d(*identities_groups, gaps_dx: np.ndarray = None, gaps_dy: np.ndarray = None, 
+            gaps_dz: np.ndarray = None, layout: Tuple[int] = None, margin: float = 1.0,
+            x_labels: List[str] = None, y_labels: List[str] = None, z_labels: List[str] = None, 
+            show: bool = True, use_new_api: bool = False, group_names: List[str] = None, 
+            cam_path: Union[str, Path] = None, key_bindings: Dict = None, separate_windows: bool = True, 
+            point_size: float = 5.0, scale: float = 1.0, default_camera_kwargs: Dict = None,
+            viewport_shading: str = 'LIT', auto_plane: bool = False, up_axis: str = "+Y", 
+            polyscope: bool = False):
+    """Display 3D geometries in one or multiple windows with customizable layout and camera settings.
+
+    Args:
+        *identities_groups: multiple geom objects to be displayed in separate windows, e.g. [geom_a, geom_b], [geom_c, geom_d], ...
+        gaps_dx: Spacing between objects in x direction. Defaults to [1.0, 0.0, 0.0] * margin
+        gaps_dy: Spacing between objects in y direction. Defaults to [0.0, 1.0, 0.0] * margin  
+        gaps_dz: Spacing between objects in z direction. Defaults to [0.0, 0.0, 1.0] * margin
+        layout: Tuple specifying grid layout dimensions. Defaults to (len(identities_groups),)
+        margin: Margin between objects. Defaults to 1.0
+        x_labels: Labels to display along x-axis. Defaults to None
+        y_labels: Labels to display along y-axis. Defaults to None 
+        z_labels: Labels to display along z-axis. Defaults to None
+        show: Whether to display the visualization. Defaults to True
+        use_new_api: Whether to use new Open3D visualization API. Defaults to False
+        group_names: Names for each group of geometries. Defaults to None
+        cam_path: Path to save/load camera parameters. Defaults to None
+        key_bindings: Custom keyboard controls. Defaults to None
+        separate_windows: Whether to show groups in separate windows. Defaults to True
+        point_size: Size of points in point clouds. Defaults to 5.0
+        scale: Scale factor for window size. Defaults to 1.0
+        default_camera_kwargs: Default camera parameters. Defaults to None
+        viewport_shading: Shading mode ('LIT', etc). Defaults to 'LIT'
+        auto_plane: Whether to add ground plane automatically. Defaults to False
+        up_axis: Up axis direction ("+Y", etc). Defaults to "+Y"
+        polyscope: Whether to use polyscope for visualization. Defaults to False
+
+    Returns:
+        Union[List[Scene], Scene]: List of render.Scene objects if separate_windows=True and multiple groups,
+            otherwise single render.Scene object
+    """
     import pycg.render as render
 
     scenes = []
@@ -255,18 +379,21 @@ def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout
     if default_camera_kwargs is None:
         default_camera_kwargs = {}
 
+    # Handle separate windows case
     if separate_windows:
+        # Split into individual groups
         identities_groups = [[t] for t in identities_groups]
         group_names = [[t] for t in group_names] if group_names is not None else [None for _ in identities_groups]
 
+        # Calculate layout dimensions
         if layout is None or len(layout) == 1:
             layout_rows, layout_cols = 1, len(identities_groups)
         else:
             layout_rows = math.ceil(len(identities_groups) / layout[1]) if layout[0] == -1 else layout[0]
             layout_cols = math.ceil(len(identities_groups) / layout_rows)
 
+        # Set default window size based on monitor dimensions if available
         if len(default_camera_kwargs) == 0:
-            # Get monitor width so that we can fit in.
             if MONITOR_HEIGHT is not None and MONITOR_WIDTH is not None:
                 screen_width = MONITOR_WIDTH
                 screen_height = MONITOR_HEIGHT - 128
@@ -278,9 +405,11 @@ def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout
                 default_camera_kwargs = {'w': 1024, 'h': 768}
 
     else:
+        # Single window case
         identities_groups = [identities_groups]
         group_names = [group_names]
 
+    # Create scenes for each group
     for ig, gn in zip(identities_groups, group_names):
         flattened_identities, flattened_names = layout_entities(*ig, gaps_dx=gaps_dx, gaps_dy=gaps_dy, gaps_dz=gaps_dz,
                                                                 layout=layout if not separate_windows else None,
@@ -302,6 +431,7 @@ def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout
         scenes.append(scene)
         scene_titles.append(gn[0] if gn is not None else None)
 
+    # Handle visualization
     if separate_windows and len(scenes) > 1:
         assert not polyscope, "Polyscope is not supported for multiple windows."
         if show:
@@ -331,25 +461,61 @@ def show_3d(*identities_groups, gaps_dx=None, gaps_dy=None, gaps_dz=None, layout
 
 def pointflow(base_pc: np.ndarray, base_flow: np.ndarray, dest_pc: np.ndarray = None,
               match_color: np.ndarray = None, return_transformed: bool = True):
+    """Visualize point cloud flow/deformation with colored points and lines.
+    
+    This function creates a visualization of point flow/deformation by showing:
+    - Source points in red
+    - Transformed points (base_pc + flow) in green 
+    - Flow lines connecting corresponding points
+    - Optional target points in blue
+    
+    Args:
+        base_pc (np.ndarray): Source point cloud of shape (N, 3)
+        base_flow (np.ndarray): Flow vectors of shape (N, 3) representing point displacements
+        dest_pc (np.ndarray, optional): Target/destination point cloud of shape (M, 3). Defaults to None.
+        match_color (np.ndarray, optional): Color indices for flow lines of shape (N,). Defaults to None.
+        return_transformed (bool, optional): Whether to include transformed points in output. Defaults to True.
+        
+    Returns:
+        list: List of Open3D geometries:
+            - Source point cloud (red)
+            - Transformed point cloud (green) if return_transformed=True  
+            - Flow lines connecting source and transformed points
+            - Target point cloud (blue) if dest_pc is provided
+    """
+    # Convert inputs to numpy arrays with correct dimensions
     base_pc = ensure_from_torch(base_pc, 2)
     base_flow = ensure_from_torch(base_flow, 2)
+    
+    # Validate input shapes
     assert base_pc.shape[1] == 3 and len(base_pc.shape) == 2, f"Point cloud is of size {base_pc.shape}!"
     assert base_flow.shape[1] == 3 and len(base_flow.shape) == 2, f"Point flow is of size {base_flow.shape}!"
     assert base_flow.shape[0] == base_pc.shape[0], f"Cloud&flow mismatch: {base_pc.shape}, {base_flow.shape}"
+    
     print("Start from red, go to green, target is blue.")
+    
+    # Create source point cloud (red)
     base_pcd = o3d.geometry.PointCloud()
     base_pcd.points = o3d.utility.Vector3dVector(base_pc)
     base_pcd.paint_uniform_color((1.0, 0., 0.))
+    
+    # Create transformed point cloud (green)
     final_pcd = o3d.geometry.PointCloud()
     final_pcd.points = o3d.utility.Vector3dVector(base_pc + base_flow)
     final_pcd.paint_uniform_color((0., 1.0, 0.))
+    
+    # Create flow lines connecting corresponding points
     corres_lineset = o3d.geometry.LineSet(
         points=o3d.utility.Vector3dVector(np.vstack([base_pc, base_pc + base_flow])),
         lines=o3d.utility.Vector2iVector(np.arange(2 * base_flow.shape[0]).reshape((2, -1)).T))
+    
+    # Build list of geometries to return
     if return_transformed:
         all_drawables = [base_pcd, final_pcd, corres_lineset]
     else:
         all_drawables = [base_pcd, corres_lineset]
+        
+    # Add target point cloud if provided (blue)
     if dest_pc is not None:
         dest_pc = ensure_from_torch(dest_pc, 2)
         assert dest_pc.shape[1] == 3 and len(dest_pc.shape) == 2, f"Point cloud is of size {dest_pc.shape}!"
@@ -357,6 +523,8 @@ def pointflow(base_pc: np.ndarray, base_flow: np.ndarray, dest_pc: np.ndarray = 
         dest_pcd.points = o3d.utility.Vector3dVector(dest_pc)
         dest_pcd.paint_uniform_color((0., 0., 1.0))
         all_drawables.append(dest_pcd)
+        
+    # Color flow lines if colors provided
     if match_color is not None:
         color_map = np.asarray(matplotlib.cm.get_cmap('tab10').colors)
         match_color = match_color % (color_map.shape[0])
@@ -367,22 +535,53 @@ def pointflow(base_pc: np.ndarray, base_flow: np.ndarray, dest_pc: np.ndarray = 
     return all_drawables
 
 
-def correspondence(source_pc: np.ndarray, target_pc: np.ndarray, matches=None, match_color: np.ndarray = None,
-                   subsampled_ratio=1.0, gap=None, match_color_normalize: bool = False, **color_kwargs):
+def correspondence(source_pc: Union[np.ndarray, o3d.geometry.PointCloud], 
+                  target_pc: Union[np.ndarray, o3d.geometry.PointCloud], 
+                  matches: Optional[Union[np.ndarray, "torch.Tensor"]] = None, 
+                  match_color: Optional[np.ndarray] = None,
+                  subsampled_ratio: float = 1.0, 
+                  gap: Optional[np.ndarray] = None, 
+                  match_color_normalize: bool = False, 
+                  **color_kwargs) -> o3d.geometry.LineSet:
+    """Creates a visualization of correspondences between two point clouds.
+
+    This function visualizes point-to-point correspondences between source and target point clouds
+    by creating a line set connecting corresponding points. The source points are colored red and 
+    target points are colored green. The correspondence lines can be colored based on match_color.
+
+    Args:
+        source_pc: Source point cloud as numpy array (N,3) or Open3D PointCloud
+        target_pc: Target point cloud as numpy array (N,3) or Open3D PointCloud  
+        matches: Optional array of shape (M,2) containing indices of corresponding points.
+                If None, assumes 1-to-1 correspondence between points.
+        match_color: Optional array of shape (M,) for coloring correspondence lines.
+                    Can be integers for discrete colors or floats for continuous colormap.
+        subsampled_ratio: Float between 0 and 1 for randomly sampling a subset of matches to display.
+        gap: Optional (1,3) array specifying translation to apply to target points.
+        match_color_normalize: If True, normalizes float match_color values to [0,1] range.
+        **color_kwargs: Additional arguments passed to lineset() for line coloring.
+
+    Returns:
+        o3d.geometry.LineSet: Line set visualization of point correspondences
+    """
+    # Convert point clouds to numpy arrays if needed
     if isinstance(source_pc, o3d.geometry.PointCloud):
         source_pc = np.asarray(source_pc.points)
     if isinstance(target_pc, o3d.geometry.PointCloud):
         target_pc = np.asarray(target_pc.points)
 
+    # Convert inputs to numpy arrays with correct dimensions
     source_pc = ensure_from_torch(source_pc, dim=2)
     target_pc = ensure_from_torch(target_pc, dim=2)
 
+    # Validate inputs
     assert 0.0 < subsampled_ratio <= 1.0
     assert source_pc.shape[1] == 3 and len(source_pc.shape) == 2, f"Source PC is of size {source_pc.shape}!"
     assert target_pc.shape[1] == 3 and len(target_pc.shape) == 2, f"Target PC is of size {target_pc.shape}!"
     if gap is None:
         gap = np.asarray([[0.0, 0.0, 0.0]])
 
+    # Create matches if not provided
     if matches is None:
         assert source_pc.shape[0] == target_pc.shape[0]
         matches = np.expand_dims(np.arange(source_pc.shape[0]), 1).repeat(2, axis=1).astype(int)
@@ -391,32 +590,41 @@ def correspondence(source_pc: np.ndarray, target_pc: np.ndarray, matches=None, m
         matches = np.asarray(matches).astype(int).copy()
         assert matches.shape[1] == 2, f"Matches is not valid! {matches.shape}"
 
+    # Randomly subsample matches if ratio < 1
     match_sub_inds = np.random.choice(np.arange(matches.shape[0]),
-                                      int(subsampled_ratio * matches.shape[0]),
-                                      replace=False)
+                                     int(subsampled_ratio * matches.shape[0]),
+                                     replace=False)
     matches = matches[match_sub_inds, :]
     matches[:, 1] += source_pc.shape[0]
 
+    # Create source point cloud (red)
     source_pcd = o3d.geometry.PointCloud()
     source_pcd.points = o3d.utility.Vector3dVector(source_pc.astype(float).copy())
     source_pcd.paint_uniform_color([1.0, 0.0, 0.0])
+    
+    # Create target point cloud (green)
     target_pcd = o3d.geometry.PointCloud()
     target_pcd.points = o3d.utility.Vector3dVector(target_pc.astype(float).copy() + gap)
     target_pcd.paint_uniform_color([0.0, 1.0, 0.0])
 
+    # Create line set connecting corresponding points
     corres_lineset = lineset(
         np.vstack([source_pc.astype(float), target_pc.astype(float).copy() + gap]), matches,
         **color_kwargs
     )
+
+    # Color the correspondence lines if match_color provided
     if match_color is not None:
         match_color = match_color[match_sub_inds]
         if match_color.dtype == float or match_color.dtype == np.float32:
+            # Handle continuous color values using jet colormap
             if match_color_normalize:
                 min_match_color, max_match_color = match_color.min(), match_color.max()
                 match_color = (match_color - min_match_color) / (max_match_color - min_match_color + 1e-6)
                 print(f"Match Color, minimum = {min_match_color}, maximum = {max_match_color}.")
             corres_lineset.colors = o3d.utility.Vector3dVector(matplotlib.cm.jet(match_color)[:, :3])
         else:
+            # Handle discrete color values using tab10 colormap
             color_map = np.asarray(matplotlib.cm.get_cmap('tab10').colors)
             match_color = match_color % (color_map.shape[0])
             color_map = np.vstack([color_map, np.zeros((1, 3))])
@@ -519,49 +727,90 @@ def multiview_segmentation(pcs: List[np.ndarray], segm: Dict[int, np.ndarray], g
     return drawables
 
 
-def frame(transform: Isometry = Isometry(), size=1.0):
+def frame(transform: Isometry = Isometry(), size: float = 1.0):
+    """Create a coordinate frame visualization object at the specified transform.
+    
+    Creates a coordinate frame mesh with RGB colored axes (Red=X, Green=Y, Blue=Z)
+    positioned and oriented according to the input transform.
+
+    Args:
+        transform (Isometry): The pose transform to apply to the frame. Defaults to identity transform.
+        size (float): The size/scale of the coordinate frame axes. Defaults to 1.0.
+
+    Returns:
+        o3d.geometry.TriangleMesh: Triangle mesh representing the coordinate frame
+    """
+    # Create coordinate frame mesh with specified size
     frame_obj = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size)
+    # Apply transform to position and orient the frame
     frame_obj.transform(transform.matrix)
     return frame_obj
 
-
 def camera(transform: Isometry = Isometry(), wh_ratio: float = 4.0 / 3.0, scale: float = 1.0, fovx: float = 90.0,
-           color_id: int = -1, image: np.ndarray = None):
-    pw = np.tan(np.deg2rad(fovx / 2.)) * scale
-    ph = pw / wh_ratio
+           color_id: int = -1, image: Optional[np.ndarray] = None):
+    """Create a camera visualization object with optional image texture.
+    
+    Creates a wireframe camera frustum visualization with optional textured image plane.
+    The camera is positioned and oriented according to the input transform.
+
+    Args:
+        transform (Isometry): The pose transform to apply to the camera. Defaults to identity transform.
+        wh_ratio (float): Width/height ratio of the camera frustum. Defaults to 4/3.
+        scale (float): Scale factor for camera size. Defaults to 1.0.
+        fovx (float): Horizontal field of view in degrees. Defaults to 90.0.
+        color_id (int): Color index for wireframe (-1 for black, otherwise uses tab10 colormap). Defaults to -1.
+        image (Optional[np.ndarray]): Optional image to texture onto frustum far plane. Defaults to None.
+
+    Returns:
+        Union[o3d.geometry.LineSet, List[Union[o3d.geometry.LineSet, o3d.geometry.TriangleMesh]]]: 
+            If no image provided: LineSet representing camera wireframe
+            If image provided: List containing wireframe LineSet and textured TriangleMesh
+    """
+    # Calculate frustum dimensions based on FOV and scale
+    pw = np.tan(np.deg2rad(fovx / 2.)) * scale  # Half width of frustum far plane
+    ph = pw / wh_ratio  # Half height of frustum far plane
+    
+    # Define frustum vertices and line connections
     all_points = np.asarray([
-        [0.0, 0.0, 0.0],
-        [pw, ph, scale],
-        [pw, -ph, scale],
-        [-pw, ph, scale],
-        [-pw, -ph, scale],
+        [0.0, 0.0, 0.0],  # Camera center
+        [pw, ph, scale],   # Top right
+        [pw, -ph, scale],  # Bottom right 
+        [-pw, ph, scale],  # Top left
+        [-pw, -ph, scale], # Bottom left
     ])
     line_indices = np.asarray([
-        [0, 1], [0, 2], [0, 3], [0, 4],
-        [1, 2], [1, 3], [3, 4], [2, 4]
+        [0, 1], [0, 2], [0, 3], [0, 4],  # Lines from center to corners
+        [1, 2], [1, 3], [3, 4], [2, 4]   # Lines connecting corners
     ])
+    
+    # Create wireframe geometry
     geom = o3d.geometry.LineSet(
         points=o3d.utility.Vector3dVector(all_points),
         lines=o3d.utility.Vector2iVector(line_indices))
 
+    # Set wireframe color
     if color_id == -1:
-        my_color = np.zeros((3,))
+        my_color = np.zeros((3,))  # Black
     else:
         my_color = np.asarray(matplotlib.cm.get_cmap('tab10').colors)[color_id, :3]
     geom.colors = o3d.utility.Vector3dVector(np.repeat(np.expand_dims(my_color, 0), line_indices.shape[0], 0))
     geom.transform(transform.matrix)
 
+    # Add optional textured image plane
     if image is not None:
         img_mesh = o3d.geometry.TriangleMesh()
+        # Define vertices for image plane
         img_mesh.vertices = o3d.utility.Vector3dVector(np.array([
-            [pw, ph, scale],
-            [pw, -ph, scale],
-            [-pw, ph, scale],
-            [-pw, -ph, scale],
+            [pw, ph, scale],    # Top right
+            [pw, -ph, scale],   # Bottom right
+            [-pw, ph, scale],   # Top left
+            [-pw, -ph, scale],  # Bottom left
         ]))
+        # Define triangles
         img_mesh.triangles = o3d.utility.Vector3iVector(np.asarray([
-            [0, 1, 2], [2, 1, 3],
+            [0, 1, 2], [2, 1, 3],  # Two triangles forming rectangle
         ]))
+        # Define UV coordinates for texture mapping
         img_mesh.triangle_uvs = o3d.utility.Vector2dVector(np.array([
             [1.0, 1.0], [1.0, 0.0], [0.0, 1.0],
             [0.0, 1.0], [1.0, 0.0], [0.0, 0.0]
@@ -574,86 +823,153 @@ def camera(transform: Isometry = Isometry(), wh_ratio: float = 4.0 / 3.0, scale:
 
     return geom
 
-
 def arrow(base: np.ndarray, target: np.ndarray,
-          scale: float = 1.0, resolution: int = 5, fix_cone_height: float = None, cone_enlarge_ratio: float = 4.0,
+          scale: float = 1.0, resolution: int = 5, 
+          fix_cone_height: float = None, cone_enlarge_ratio: float = 4.0,
           color_id: int = 0, **cmap_kwargs):
+    """Create 3D arrow(s) from base point(s) to target point(s).
+
+    Args:
+        base: Base point(s) of arrow(s), shape (N,3) or (3,)
+        target: Target point(s) of arrow(s), shape (N,3) or (3,)
+        scale: Overall scale factor for arrow size
+        resolution: Resolution of arrow cylinder/cone, higher means smoother
+        fix_cone_height: If set, fixes arrow head cone height to this value
+        cone_enlarge_ratio: Ratio of cone radius to cylinder radius
+        color_id: Color index for arrow(s), used with pycg colormap
+        **cmap_kwargs: Additional arguments passed to colored_mesh()
+
+    Returns:
+        o3d.geometry.TriangleMesh: Colored arrow mesh(es)
+    """
+    # Convert torch tensors to numpy if needed
     base = ensure_from_torch(base, 2)
     target = ensure_from_torch(target, 2)
 
-    n_verts = 0
+    n_verts = 0  # Track total vertices for face indexing
     arrow_verts = []
     arrow_faces = []
+    
+    # Create arrow for each base-target pair
     for b, t in zip(base, target):
+        # Get transformation from origin to arrow direction
         arrow_iso = Isometry.look_at(b, t)
         arrow_len = np.linalg.norm(t - b)
-        base_radius = scale * 0.05
+        base_radius = scale * 0.05  # Base cylinder radius
 
+        # Calculate arrow head (cone) height
         if fix_cone_height is not None:
             cone_height = min(fix_cone_height, arrow_len * 0.9)
         else:
             cone_height = 0.3 * arrow_len
 
+        # Create arrow geometry
         arrow_obj = o3d.geometry.TriangleMesh.create_arrow(resolution=resolution,
                                                            cylinder_height=arrow_len - cone_height,
                                                            cone_height=cone_height,
                                                            cone_radius=cone_enlarge_ratio * base_radius,
                                                            cylinder_radius=base_radius,
                                                            cylinder_split=1)
+        # Transform arrow to correct position/orientation
         arrow_obj.transform(arrow_iso.matrix)
 
+        # Collect vertices and faces, updating face indices
         arrow_verts.append(np.asarray(arrow_obj.vertices))
         arrow_faces.append(np.asarray(arrow_obj.triangles) + n_verts)
         n_verts += len(arrow_obj.vertices)
 
+    # Combine all arrows into single colored mesh
     return colored_mesh(np.concatenate(arrow_verts), np.concatenate(arrow_faces), ucid=color_id, **cmap_kwargs)
 
 
-def sphere_from_pc(pcd: o3d.geometry.PointCloud, radius: float = 0.02, resolution: int = 5):
+def sphere_from_pc(pcd: o3d.geometry.PointCloud, radius: float = 0.02, resolution: int = 5) -> o3d.geometry.TriangleMesh:
+    """Convert a point cloud to a mesh of spheres by placing a sphere at each point location.
+
+    Args:
+        pcd (o3d.geometry.PointCloud): Input point cloud to convert
+        radius (float, optional): Radius of each sphere. Defaults to 0.02.
+        resolution (int, optional): Resolution of each sphere mesh. Higher values create smoother spheres. Defaults to 5.
+
+    Returns:
+        o3d.geometry.TriangleMesh: Combined mesh of all spheres
+    """
+    # Initialize empty mesh to store combined spheres
     final_mesh = o3d.geometry.TriangleMesh()
+
+    # Get point positions and colors if available
     pc_pos = np.asarray(pcd.points)
     if pcd.has_colors():
         pc_colors = np.asarray(pcd.colors)
     else:
         pc_colors = None
+
+    # Create and position a sphere for each point
     for pc_id in range(len(pc_pos)):
+        # Create sphere with specified radius and resolution
         cur_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=radius, resolution=resolution)
+        # Move sphere to point position
         cur_sphere.translate(pc_pos[pc_id])
         cur_sphere.compute_vertex_normals()
+        # Color sphere if point cloud has colors
         if pc_colors is not None:
             cur_sphere.paint_uniform_color(pc_colors[pc_id])
+        # Add to combined mesh
         final_mesh += cur_sphere
+
     return final_mesh
 
+def surfel_from_pc(pcd: o3d.geometry.PointCloud, radius: float = 0.02, resolution: int = 5) -> o3d.geometry.TriangleMesh:
+    """Convert a point cloud to a mesh of surfels (oriented disks) by placing a circular disk at each point location.
+    
+    Args:
+        pcd (o3d.geometry.PointCloud): Input point cloud to convert. Must have normals.
+        radius (float, optional): Radius of each surfel disk. Defaults to 0.02.
+        resolution (int, optional): Number of vertices to use for approximating each circular disk. 
+            Higher values create smoother circles. Defaults to 5.
 
-def surfel_from_pc(pcd: o3d.geometry.PointCloud, radius: float = 0.02, resolution: int = 5):
+    Returns:
+        o3d.geometry.TriangleMesh: Combined mesh of all surfels
+    """
     assert pcd.has_normals(), "Point Cloud must have normals!"
 
+    # Convert points and normals to numpy arrays
     pc, normal = np.array(pcd.points), np.array(pcd.normals)
+    
+    # Compute local coordinate frame for each point based on its normal
+    # normal_x and normal_y form an orthogonal basis in the tangent plane
     normal_x = np.stack([normal[:, 1] - normal[:, 2], -normal[:, 0], normal[:, 0]], axis=-1)
     normal_x /= np.linalg.norm(normal_x, axis=-1, keepdims=True)
     normal_y = np.cross(normal, normal_x)
+    
+    # Scale the basis vectors by radius
     normal_x *= radius
     normal_y *= radius
 
+    # Generate vertices and faces for each surfel disk
     vertices = []
     faces = []
     for r in range(resolution):
+        # Create vertices in a circular pattern
         angle = r / resolution * 2 * np.pi
         v = pc + normal_x * np.cos(angle) + normal_y * np.sin(angle)
         vertices.append(v)
+        # Create triangular faces, connecting to center point
         if r > 1:
             faces.append([0, r - 1, r])
+            
+    # Reshape vertices and faces into final mesh structure
     vertices = np.stack(vertices, axis=1).reshape((-1, 3))
     faces = np.expand_dims(np.concatenate(faces), axis=0).repeat(pc.shape[0], 0)
     faces += np.expand_dims(np.arange(pc.shape[0]), axis=-1) * resolution
     faces = faces.reshape((-1, 3))
 
+    # Create and populate the mesh object
     mesh = o3d.geometry.TriangleMesh()
     mesh.vertices = o3d.utility.Vector3dVector(vertices)
     mesh.triangles = o3d.utility.Vector3iVector(faces)
     mesh.compute_vertex_normals()
 
+    # Transfer colors if the point cloud has them
     if pcd.has_colors():
         rgb = np.array(pcd.colors)
         color = np.tile(rgb, (1, resolution)).reshape((-1, 3))
@@ -703,17 +1019,62 @@ def oriented_pointcloud(pcd: o3d.geometry.PointCloud, knn: int = None, radius: f
 
 
 def sphere(center: np.ndarray = np.zeros((3, )), radius: float = 1.0, resolution: int = 10, ucid: int = None):
+    """Create a sphere geometry using point cloud representation.
+
+    Args:
+        center (np.ndarray, optional): 3D coordinates of sphere center. Defaults to [0,0,0].
+        radius (float, optional): Radius of the sphere. Defaults to 1.0.
+        resolution (int, optional): Number of points used to represent the sphere surface. 
+            Higher resolution means smoother sphere. Defaults to 10.
+        ucid (int, optional): Unique color ID for the sphere. If provided, the sphere will be 
+            colored according to this ID using the default colormap. Defaults to None.
+
+    Returns:
+        o3d.geometry.PointCloud: A point cloud geometry representing the sphere.
+    """
+    # Add singleton dimension to center coordinates to make it (1,3) shape
+    # and pass to pointcloud() function with sphere parameters
     return pointcloud(
         center[None, :], is_sphere=True, ucid=ucid, sphere_radius=radius, sphere_resolution=resolution
     )
 
 
-def pointcloud(pc, cid: np.ndarray = None, color: np.ndarray = None, ucid: int = None, cmap='tab10',
-               normal: np.ndarray = None, estimate_normals: bool = False, estimate_normals_radius=None, estimate_normals_nn=16,
-               double_layer: bool = False, double_layer_delta: float = 0.01,
-               cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False, cfloat_annotated: bool = True,
-               is_sphere=False, sphere_radius=0.02, sphere_resolution=5,
-               is_surfel=False, surfel_radius=0.02, surfel_resolution=5):
+def pointcloud(pc: Union[np.ndarray, o3d.geometry.PointCloud], cid: np.ndarray = None, color: np.ndarray = None, 
+               ucid: int = None, cmap: str = 'tab10', normal: np.ndarray = None, estimate_normals: bool = False, 
+               estimate_normals_radius: float = None, estimate_normals_nn: int = 16, double_layer: bool = False, 
+               double_layer_delta: float = 0.01, cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', 
+               cfloat_normalize: bool = False, cfloat_annotated: bool = True, is_sphere: bool = False, 
+               sphere_radius: float = 0.02, sphere_resolution: int = 5, is_surfel: bool = False, 
+               surfel_radius: float = 0.02, surfel_resolution: int = 5):
+    """Create a point cloud visualization with various customization options.
+
+    Args:
+        pc (Union[np.ndarray, o3d.geometry.PointCloud]): Input point cloud data, either as numpy array of shape (N,3) or Open3D PointCloud
+        cid (np.ndarray, optional): Color IDs for each point. Shape (N,). Defaults to None.
+        color (np.ndarray, optional): RGB colors for points. Shape (N,3). Defaults to None.
+        ucid (int, optional): Uniform color ID for all points. Defaults to None.
+        cmap (str, optional): Colormap name for color mapping. Defaults to 'tab10'.
+        normal (np.ndarray, optional): Normal vectors for points. Shape (N,3). Defaults to None.
+        estimate_normals (bool, optional): Whether to estimate normals if not provided. Defaults to False.
+        estimate_normals_radius (float, optional): Search radius for normal estimation. Defaults to None.
+        estimate_normals_nn (int, optional): Number of neighbors for normal estimation. Defaults to 16.
+        double_layer (bool, optional): Whether to create double-sided point cloud. Defaults to False.
+        double_layer_delta (float, optional): Offset distance for double layer. Defaults to 0.01.
+        cfloat (np.ndarray, optional): Continuous float values for coloring. Shape (N,). Defaults to None.
+        cfloat_cmap (str, optional): Colormap for continuous float values. Defaults to 'jet'.
+        cfloat_normalize (bool, optional): Whether to normalize cfloat values. Defaults to False.
+        cfloat_annotated (bool, optional): Whether to store cfloat as annotation. Defaults to True.
+        is_sphere (bool, optional): Whether to render points as spheres (o3d.geometry.TriangleMesh). Defaults to False.
+        sphere_radius (float, optional): Radius of spheres if is_sphere=True. Defaults to 0.02.
+        sphere_resolution (int, optional): Resolution of spheres if is_sphere=True. Defaults to 5.
+        is_surfel (bool, optional): Whether to render points as surfels (o3d.geometry.TriangleMesh). Defaults to False.
+        surfel_radius (float, optional): Radius of surfels if is_surfel=True. Defaults to 0.02.
+        surfel_resolution (int, optional): Resolution of surfels if is_surfel=True. Defaults to 5.
+
+    Returns:
+        Union[o3d.geometry.PointCloud, o3d.geometry.TriangleMesh, AnnotatedGeometry]: Point cloud geometry, optionally with annotations
+    """
+    # Handle input if it's already an Open3D point cloud
     if isinstance(pc, o3d.geometry.PointCloud):
         if pc.has_normals() and normal is None:
             normal = np.asarray(pc.normals)
@@ -726,15 +1087,21 @@ def pointcloud(pc, cid: np.ndarray = None, color: np.ndarray = None, ucid: int =
     assert pc.shape[1] == 3 and len(pc.shape) == 2, f"Point cloud is of size {pc.shape} and cannot be displayed!"
     point_cloud = o3d.geometry.PointCloud()
     point_cloud.points = o3d.utility.Vector3dVector(pc)
+
+    # Handle color assignment based on color IDs
     if cid is not None:
         cid = ensure_from_torch(cid, dim=1)
         assert cid.shape[0] == pc.shape[0], f"Point and color id must have same size {pc.shape[0]}, {cid.shape[0]}"
         assert cid.ndim == 1, f"color id must be of size (N,) currently ndim = {cid.ndim}"
         cid = cid.astype(int)
         color = map_quantized_color(cid, cmap=cmap)
+
+    # Handle uniform color ID
     if ucid is not None:
         u_color = map_quantized_color(ucid, cmap=cmap)
         color = np.repeat(u_color[None, :], pc.shape[0], 0)
+
+    # Handle continuous float values for coloring
     if cfloat is not None:
         cfloat = ensure_from_torch(cfloat, 1)
         if color is None:
@@ -748,6 +1115,8 @@ def pointcloud(pc, cid: np.ndarray = None, color: np.ndarray = None, ucid: int =
             color = matplotlib.cm.get_cmap(cfloat_cmap)(cfloat)[:, :3]
         else:
             color = color * np.expand_dims(cfloat, 1)
+
+    # Assign colors to point cloud
     if color is not None:
         color = ensure_from_torch(color)
         assert color.shape[0] == pc.shape[0], f"Point and color must have same size {color.shape[0]}, {pc.shape[0]}"
@@ -755,50 +1124,86 @@ def pointcloud(pc, cid: np.ndarray = None, color: np.ndarray = None, ucid: int =
             color = color.astype(float) / 255.
         point_cloud.colors = o3d.utility.Vector3dVector(color[:, :3].astype(float))
 
+    # Handle normal vectors
     if normal is not None:
         normal = ensure_from_torch(normal)
         point_cloud.normals = o3d.utility.Vector3dVector(normal)
 
+    # Estimate normals if requested
     if estimate_normals:
         assert normal is None, "Input already has normal!"
         point_cloud = oriented_pointcloud(point_cloud, knn=estimate_normals_nn, radius=estimate_normals_radius,
                                           double_layer=double_layer, double_layer_delta=double_layer_delta)
 
+    # Convert points to spheres if requested
     if is_sphere:
         point_cloud = sphere_from_pc(point_cloud, sphere_radius, sphere_resolution)
 
+    # Convert points to surfels if requested
     if is_surfel:
         point_cloud = surfel_from_pc(point_cloud, surfel_radius, surfel_resolution)
 
+    # Add annotations if present
     if isinstance(point_cloud, o3d.geometry.PointCloud) and cloud_annotation is not None:
         point_cloud = AnnotatedGeometry(point_cloud, cloud_annotation)
 
     return point_cloud
 
 
-def thin_box(plane_n: np.ndarray, plane_c: np.ndarray, is_mesh=True):
-    ex_x = ex_y = 2.0
-    ex_z = 0.002
+def thin_box(plane_n: np.ndarray, plane_c: np.ndarray, is_mesh: bool = True):
+    """Create a thin box (plane-like) geometry oriented according to a normal vector.
+
+    Args:
+        plane_n: A (3,) numpy array specifying the normal direction of the box
+        plane_c: A (3,) numpy array specifying the center position of the box
+        is_mesh: If True, returns a TriangleMesh, otherwise returns an OrientedBoundingBox
+
+    Returns:
+        o3d.geometry.TriangleMesh or o3d.geometry.OrientedBoundingBox: The created thin box geometry
+    """
+    # Set box dimensions - thin in z direction
+    ex_x = ex_y = 2.0  # width and height
+    ex_z = 0.002      # very small thickness
+
+    # Calculate rotation to align z-axis with plane normal
     rot = Quaternion(axis=np.cross([0.0, 0.0, 1.0], plane_n), radians=np.arccos(plane_n[2])).rotation_matrix
 
     if is_mesh:
+        # Create triangle mesh box
         obb = o3d.geometry.TriangleMesh.create_box(width=ex_x, height=ex_y, depth=ex_z)
+        # Center the box at origin before rotation
         obb.translate((-ex_x / 2.0, -ex_y / 2.0, -ex_z / 2.0))
         obb.rotate(rot)
         obb.translate(plane_c)
     else:
+        # Create oriented bounding box
         obb = o3d.geometry.OrientedBoundingBox()
         obb.center = plane_c
-        obb.extent = (5.0, 5.0, 0.1)
+        obb.extent = (5.0, 5.0, 0.1)  # Different dimensions for bounding box
         obb.rotate(rot)
     return obb
 
 
-def plane(center, normal, scale: float):
+def plane(center: np.ndarray, normal: np.ndarray, scale: float):
+    """Create a planar mesh geometry oriented according to a normal vector.
+
+    Args:
+        center: A (3,) numpy array specifying the center position of the plane
+        normal: A (3,) numpy array specifying the normal direction of the plane
+        scale: A float value determining the size of the plane (half-width/height)
+
+    Returns:
+        o3d.geometry.TriangleMesh: A triangular mesh representing the plane, colored white
+    """
+    # Calculate rotation axis to align z-axis with plane normal
     raxis = np.cross([0.0, 0.0, 1.0], normal)
+    # Handle case when normal is parallel to z-axis
     if abs(np.linalg.norm(raxis)) < 1e-6:
         raxis = np.asarray([1.0, 0.0, 0.0])
+    # Compute rotation matrix
     rot = Quaternion(axis=raxis, radians=np.arccos(normal[2])).rotation_matrix
+    
+    # Create mesh and set vertices (square in xy-plane)
     mesh = o3d.geometry.TriangleMesh()
     mesh.vertices = o3d.utility.Vector3dVector(np.array([
         [-scale, -scale, 0.0],
@@ -806,36 +1211,73 @@ def plane(center, normal, scale: float):
         [scale, scale, 0.0],
         [scale, -scale, 0.0],
     ]))
+    # Define triangles (two triangles forming a square)
     mesh.triangles = o3d.utility.Vector3iVector(np.asarray([
         [0, 2, 1], [0, 3, 2]
     ]))
+    # Apply rotation and translation
     mesh.rotate(rot)
     mesh.translate(np.asarray(center))
+    # Set color and compute normals
     mesh.paint_uniform_color([1.0, 1.0, 1.0])
     mesh.compute_vertex_normals()
     return mesh
 
 
-def colored_mesh(*args, **kwargs):
-    # Create a mesh, but guaranteed to have color.
+def colored_mesh(*args, **kwargs) -> o3d.geometry.TriangleMesh:
+    """Create a colored mesh by ensuring color parameters are set.
+    
+    This is a wrapper around the mesh() function that guarantees the resulting mesh
+    will have color by setting a default unique color ID (ucid) if no color 
+    parameters are provided.
+
+    Args:
+        *args: Variable length argument list to pass to mesh()
+        **kwargs: Arbitrary keyword arguments to pass to mesh()
+                 Supported color parameters:
+                 - cid: Array of color indices
+                 - ucid: Single unique color ID
+                 If neither is provided, ucid=0 will be used
+
+    Returns:
+        o3d.geometry.TriangleMesh: A colored triangle mesh
+    """
+    # If no color parameters provided, set default unique color ID
     if 'cid' not in kwargs and 'ucid' not in kwargs:
         kwargs['ucid'] = 0
+    # Forward all arguments to mesh() function
     return mesh(*args, **kwargs)
 
 
 def textured_mesh(mesh: Union[o3d.geometry.TriangleMesh, o3d.t.geometry.TriangleMesh],
-                  texture: np.ndarray = None):
+                  texture: Optional[np.ndarray] = None) -> Union[o3d.geometry.TriangleMesh, o3d.t.geometry.TriangleMesh]:
+    """Apply a texture to a triangle mesh.
+
+    This function takes a triangle mesh and applies a texture to it. If no texture is provided,
+    it uses a default UV texture from the assets folder.
+
+    Args:
+        mesh: The input triangle mesh to be textured. Can be either legacy or tensor-based Open3D mesh.
+        texture: Optional texture image as a numpy array. If None, uses default UV texture. 
+               Expected shape is (H, W, C) where C is number of channels (3 for RGB, 4 for RGBA).
+               Data type is expected to be uint8.
+
+    Returns:
+        The input mesh with texture applied. Returns same type as input mesh (legacy or tensor-based).
+    """
+    # Load default texture if none provided
     if texture is None:
         from pycg import image, get_assets_path
         texture = image.read(get_assets_path() / "uv.png")
 
+    # Handle legacy Open3D mesh
     if isinstance(mesh, o3d.geometry.TriangleMesh):
         mesh.textures = [o3d.geometry.Image(texture)]
+    # Handle tensor-based Open3D mesh
     else:
         mesh.material.material_name = 'defaultLit'
         mesh.material.texture_maps['albedo'] = o3d.t.geometry.Image(o3d.core.Tensor.from_numpy(texture))
     return mesh
-
 
 def mesh(mesh_or_vertices: Union[np.ndarray, "torch.Tensor", o3d.geometry.TriangleMesh],
          triangles: Union[np.ndarray, "torch.Tensor"] = None,
@@ -847,18 +1289,44 @@ def mesh(mesh_or_vertices: Union[np.ndarray, "torch.Tensor", o3d.geometry.Triang
          triangle_uv_inds: Union[np.ndarray, "torch.Tensor"] = None,
          compute_vertex_normals: bool = True,
          use_new_api: bool = False):
+    """Create a triangle mesh with optional coloring and texture mapping.
+
+    This function creates an Open3D triangle mesh from input vertices and triangles, with support for
+    various coloring options and texture mapping.
+
+    Args:
+        mesh_or_vertices: Either an existing Open3D mesh or vertex coordinates of shape (N, 3)
+        triangles: Triangle indices of shape (M, 3). Not needed if mesh_or_vertices is an Open3D mesh
+        color: Per-vertex RGB(A) colors of shape (N, 3/4). Values in [0,1] or uint8
+        cid: Per-vertex color indices for categorical coloring using colormap
+        ucid: Single color index for uniform mesh coloring using colormap
+        cmap: Colormap name for categorical colors. Default: 'tab10'
+        cfloat: Per-vertex float values for continuous coloring
+        cfloat_cmap: Colormap name for continuous colors. Default: 'jet'
+        cfloat_normalize: Whether to normalize cfloat values to [0,1]. Default: False
+        triangle_uvs: UV coordinates for texture mapping, shape (M*3, 2) or (M, 3, 2)
+        triangle_uv_inds: UV indices if using indexed UVs, shape (M, 3)
+        compute_vertex_normals: Whether to compute vertex normals. Default: True
+        use_new_api: Whether to return tensor-based mesh (new API). Default: False
+
+    Returns:
+        o3d.geometry.TriangleMesh or o3d.t.geometry.TriangleMesh: Created triangle mesh
+    """
+    # Handle input mesh or vertices
     if isinstance(mesh_or_vertices, o3d.geometry.TriangleMesh):
         assert triangles is None
         vertices = np.asarray(mesh_or_vertices.vertices).copy()
         triangles = np.asarray(mesh_or_vertices.triangles).copy()
     elif triangles is None:
-        # Triangle Soup
+        # Create triangle soup from vertices (each 3 vertices form a triangle)
         vertices = ensure_from_torch(mesh_or_vertices, 3).reshape(-1, 3)
         triangles = np.arange(vertices.shape[0]).reshape(-1, 3)
     else:
+        # Use provided vertices and triangles
         vertices = ensure_from_torch(mesh_or_vertices, 2)
         triangles = ensure_from_torch(triangles, 2)
 
+    # Handle per-vertex colors
     if color is not None:
         color = ensure_from_torch(color, 2)
         assert color.shape[0] == vertices.shape[0], f"vertex and color must have same size " \
@@ -866,18 +1334,22 @@ def mesh(mesh_or_vertices: Union[np.ndarray, "torch.Tensor", o3d.geometry.Triang
         if color.dtype == np.uint8:
             color = color.astype(float) / 255.
 
+    # Create base mesh
     mesh = o3d.geometry.TriangleMesh()
     mesh.vertices = o3d.utility.Vector3dVector(vertices)
     mesh.triangles = o3d.utility.Vector3iVector(triangles)
 
+    # Handle categorical coloring with color indices
     if cid is not None:
         cid = ensure_from_torch(cid, dim=1).astype(int)
         color = map_quantized_color(cid, cmap=cmap)
 
+    # Handle uniform coloring with single color index
     if ucid is not None:
         u_color = map_quantized_color(ucid, cmap=cmap)
         color = np.repeat(u_color[None, :], vertices.shape[0], 0)
 
+    # Handle continuous coloring with float values
     if cfloat is not None:
         if cfloat_normalize:
             cfloat_min, cfloat_max = cfloat.min(), cfloat.max()
@@ -885,13 +1357,16 @@ def mesh(mesh_or_vertices: Union[np.ndarray, "torch.Tensor", o3d.geometry.Triang
             cfloat = (cfloat - cfloat_min) / (cfloat_max - cfloat_min + 1.0e-6)
         color = matplotlib.cm.get_cmap(cfloat_cmap)(cfloat)[:, :3]
 
+    # Apply colors if any coloring method was used
     if color is not None:
         mesh.vertex_colors = o3d.utility.Vector3dVector(color[:, :3])
 
+    # Handle texture UV coordinates
     if triangle_uvs is not None:
         try:
             triangle_uvs = ensure_from_torch(triangle_uvs, dim=3, remove_batch_dim=False)
         except AssertionError:
+            # Handle indexed UV coordinates
             triangle_uvs_packed = ensure_from_torch(triangle_uvs, dim=2, remove_batch_dim=False)
             assert triangle_uv_inds is not None, "Has to provide triangle_uv_inds!"
             triangle_uv_inds = ensure_from_torch(triangle_uv_inds, dim=2, remove_batch_dim=False)
@@ -906,29 +1381,60 @@ def mesh(mesh_or_vertices: Union[np.ndarray, "torch.Tensor", o3d.geometry.Triang
         mesh.triangle_uvs = o3d.utility.Vector2dVector(triangle_uvs.reshape((-1, 2)))
         mesh.triangle_material_ids = o3d.utility.IntVector(np.zeros((len(mesh.triangles, )), dtype=np.int32))
 
+    # Convert to tensor-based mesh if requested
     if use_new_api:
         mesh = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
 
-    # if not mesh.has_vertex_normals():
+    # Compute vertex normals if requested
     if compute_vertex_normals:
         mesh.compute_vertex_normals()
+        
     return mesh
 
 
-def trimesh(geom):
+def trimesh(geom: "trimesh.Trimesh") -> o3d.geometry.TriangleMesh:
+    """Convert a trimesh geometry to Open3D mesh.
+
+    Args:
+        geom: A trimesh geometry object containing vertices and faces
+
+    Returns:
+        o3d.geometry.TriangleMesh: The converted Open3D triangle mesh
+    """
     return mesh(np.array(geom.vertices), np.array(geom.faces))
 
 
-def colored_meshes(meshes: list):
+def colored_meshes(meshes: List[o3d.geometry.TriangleMesh]) -> List[o3d.geometry.TriangleMesh]:
+    """Create a list of colored meshes, each with a unique color based on its index.
+
+    Args:
+        meshes: List of Open3D triangle meshes to be colored
+
+    Returns:
+        List[o3d.geometry.TriangleMesh]: List of colored meshes, where each mesh has a unique color
+                                        based on its position in the input list
+    """
     ans_list = []
     for mesh_id, mesh in enumerate(meshes):
         ans_list.append(colored_mesh(mesh, color_id=mesh_id))
     return ans_list
 
 
-def transformed_oobb(oobb: o3d.geometry.OrientedBoundingBox, iso: Isometry):
+def transformed_oobb(oobb: o3d.geometry.OrientedBoundingBox, iso: Isometry) -> o3d.geometry.OrientedBoundingBox:
+    """Transform an oriented bounding box by an isometry transformation.
+
+    Args:
+        oobb: The oriented bounding box to transform
+        iso: The isometry transformation to apply, containing rotation and translation
+
+    Returns:
+        o3d.geometry.OrientedBoundingBox: A new transformed oriented bounding box
+    """
+    # Create a deep copy to avoid modifying the original
     oobb = copy.deepcopy(oobb)
+    # Apply rotation around origin
     oobb.rotate(iso.q.rotation_matrix, center=np.zeros((3, 1)))
+    # Apply translation
     oobb.translate(iso.t)
     return oobb
 
@@ -939,6 +1445,23 @@ def lineset(linset_or_points: Union[np.ndarray, "torch.Tensor", o3d.geometry.Lin
             ucid: int = 0, cmap: str = 'tab10',
             cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False,
             color: Union[np.ndarray, "torch.Tensor"] = None):
+    """Create an Open3D LineSet geometry with customizable colors.
+
+    Args:
+        linset_or_points: Either an existing Open3D LineSet or points array of shape (N,3) defining line endpoints
+        lines: Array of shape (M,2) defining line segments by pairs of point indices. Required if linset_or_points is points array.
+        cid: Array of shape (M,) containing integer color indices for each line segment
+        ucid: Single integer color index to use for all lines. Ignored if cid is provided.
+        cmap: Matplotlib colormap name to use for cid/ucid coloring. Default is 'tab10'.
+        cfloat: Array of shape (M,) containing float values to map to colors
+        cfloat_cmap: Matplotlib colormap name to use for cfloat values. Default is 'jet'.
+        cfloat_normalize: Whether to normalize cfloat values to [0,1] range. Default is False.
+        color: Array of shape (M,3) containing explicit RGB colors for each line segment
+
+    Returns:
+        o3d.geometry.LineSet: Open3D LineSet geometry with specified points, lines and colors
+    """
+    # Handle input as either LineSet or points array
     if isinstance(linset_or_points, o3d.geometry.LineSet):
         assert lines is None
         points = np.asarray(linset_or_points.points).copy()
@@ -947,23 +1470,28 @@ def lineset(linset_or_points: Union[np.ndarray, "torch.Tensor", o3d.geometry.Lin
         points = ensure_from_torch(linset_or_points, 2)
         lines = ensure_from_torch(lines, 2)
 
+    # Create LineSet geometry
     geom = o3d.geometry.LineSet(
         points=o3d.utility.Vector3dVector(points),
         lines=o3d.utility.Vector2iVector(lines))
 
+    # Handle explicit colors
     if color is not None:
         color = ensure_from_torch(color, 2)
 
+    # Handle color indices
     if cid is not None:
         cid = ensure_from_torch(cid, dim=1).astype(int)
         color = map_quantized_color(cid, cmap=cmap)
         assert color.shape[0] == lines.shape[0]
 
+    # Handle uniform color index
     if ucid is not None:
-        # Use ucid
+        # Use ucid to create uniform color for all lines
         u_color = map_quantized_color(ucid, cmap=cmap)
         color = np.repeat(u_color[None, :], lines.shape[0], 0)
 
+    # Handle float color values
     if cfloat is not None:
         if cfloat_normalize:
             cfloat_min, cfloat_max = cfloat.min(), cfloat.max()
@@ -971,55 +1499,108 @@ def lineset(linset_or_points: Union[np.ndarray, "torch.Tensor", o3d.geometry.Lin
             cfloat = (cfloat - cfloat_min) / (cfloat_max - cfloat_min + 1.0e-6)
         color = matplotlib.cm.get_cmap(cfloat_cmap)(cfloat)[:, :3]
 
+    # Set colors and return
     geom.colors = o3d.utility.Vector3dVector(color)
     return geom
 
 
-def ray(rays_o: Union[np.ndarray, "torch.Tensor"], rays_d: Union[np.ndarray, "torch.Tensor"], length: float = 3.0):
-    rays_o = ensure_from_torch(rays_o, 2)
-    rays_d = ensure_from_torch(rays_d, 2)
+def ray(rays_o: Union[np.ndarray, "torch.Tensor"], 
+        rays_d: Union[np.ndarray, "torch.Tensor"], 
+        length: float = 3.0) -> o3d.geometry.LineSet:
+    """Create line segments representing rays in 3D space.
+
+    Args:
+        rays_o: Union[np.ndarray, "torch.Tensor"] Array of shape (N,3) containing ray origin points
+        rays_d: Union[np.ndarray, "torch.Tensor"] Array of shape (N,3) containing ray direction vectors 
+        length: float Length of the ray segments to visualize. Default is 3.0.
+
+    Returns:
+        o3d.geometry.LineSet: Open3D LineSet geometry containing N line segments
+            representing the rays, starting at rays_o and extending in direction rays_d
+    """
+    # Convert inputs to numpy if needed
+    rays_o = ensure_from_torch(rays_o, 2)  # Shape: (N,3)
+    rays_d = ensure_from_torch(rays_d, 2)  # Shape: (N,3)
+    
+    # Validate input shapes
     assert rays_o.shape[0] == rays_d.shape[0]
     assert rays_o.shape[1] == 3 and rays_d.shape[1] == 3
+    
+    # Normalize ray directions
     rays_d = rays_d / np.linalg.norm(rays_d, axis=1, keepdims=True)
+    
+    # Calculate ray endpoints
     rays_e = rays_o + rays_d * length
-    return lineset(np.concatenate([rays_o, rays_e], axis=0), np.stack([np.arange(len(rays_o)), np.arange(len(rays_o)) + len(rays_o)], axis=1))
+    
+    # Create line segments from origins to endpoints
+    return lineset(np.concatenate([rays_o, rays_e], axis=0), 
+                  np.stack([np.arange(len(rays_o)), np.arange(len(rays_o)) + len(rays_o)], axis=1))
 
 
-def lineset_mesh(lst: o3d.geometry.LineSet, radius: float, resolution: int = 10):
+def lineset_mesh(lst: o3d.geometry.LineSet, radius: float, resolution: int = 10) -> o3d.geometry.TriangleMesh:
+    """Create a triangle mesh representing a 3D tube around line segments.
+
+    This function converts a LineSet into a tubular mesh by creating circular cross-sections
+    around each line segment and connecting them with triangular faces. The tubes have
+    constant radius along their length.
+
+    Args:
+        lst: o3d.geometry.LineSet
+            The input line set containing line segments to be converted to tubes
+        radius: float 
+            Radius of the tubular mesh around each line segment
+        resolution: int, optional
+            Number of vertices to use for each circular cross-section. Default is 10.
+            Higher values create smoother tubes but increase geometry complexity.
+
+    Returns:
+        o3d.geometry.TriangleMesh:
+            A triangle mesh representing the tubular geometry around the input line segments,
+            with colors preserved from the input LineSet if present.
+    """
+    # Extract endpoints and connectivity from line set
     end_points = np.asarray(lst.points)
     point_indices = np.asarray(lst.lines)
 
+    # Get start and end points for each line segment
     line_starts = end_points[point_indices[:, 0]]
     line_ends = end_points[point_indices[:, 1]]
 
-    line_z = line_ends - line_starts
-    line_x = np.cross(line_z, [0, 1, 0])
+    # Compute local coordinate frame for each tube
+    line_z = line_ends - line_starts  # Tube axis direction
+    line_x = np.cross(line_z, [0, 1, 0])  # First basis vector perpendicular to tube axis
     line_x_norm = np.linalg.norm(line_x, axis=1, keepdims=True)
+    # Handle cases where line is parallel to [0,1,0]
     bad_norm_mask = line_x_norm[:, 0] < 0.001
     line_x[~bad_norm_mask] /= line_x_norm[~bad_norm_mask]
     line_x[bad_norm_mask, 0] = 1
+    # Complete orthonormal basis
     line_y = np.cross(line_z, line_x)
     line_y = line_y / np.linalg.norm(line_y, axis=1, keepdims=True)
+    # Scale basis vectors by radius
     line_x *= radius
     line_y *= radius
 
     # We assume there is one center in the circle, to form good looking circles.
+    # Generate vertices for tube cross-sections
     start_circ_verts = [line_starts + np.cos(angle) * line_x + np.sin(angle) * line_y
                         for angle in np.linspace(0.0, 2 * np.pi, resolution)] + [line_starts]
     end_circ_verts = [line_ends + np.cos(angle) * line_x + np.sin(angle) * line_y
                       for angle in np.linspace(0.0, 2 * np.pi, resolution)] + [line_ends]
     n_start = len(start_circ_verts)
     n_end = len(end_circ_verts)
-
     # Body s,e,e; Body s,e,s; Top circle; Bottom circle.
     face_ids = [[sid, n_start + (sid + 1) % resolution, n_start + sid] for sid in range(resolution)] + \
                [[sid, (sid + 1) % resolution, n_start + (sid + 1) % resolution] for sid in range(resolution)] + \
                [[n_start - 1, (sid + 1) % resolution, sid] for sid in range(resolution)] + \
                [[n_start + n_end - 1,n_start + sid, n_start + (sid + 1) % resolution] for sid in range(resolution)]
+    
+    # Combine vertices and adjust face indices for multiple tubes
     all_verts = np.stack(start_circ_verts + end_circ_verts, axis=1)
     face_ids = np.asarray(face_ids)[None, :, :] + \
                (np.arange(all_verts.shape[0]) * all_verts.shape[1])[:, None, None]
 
+    # Handle colors if present in input LineSet
     if lst.has_colors():
         line_colors = np.asarray(lst.colors)
         line_colors = np.repeat(line_colors[:, None, :], all_verts.shape[1], axis=1)
@@ -1027,19 +1608,37 @@ def lineset_mesh(lst: o3d.geometry.LineSet, radius: float, resolution: int = 10)
     else:
         line_colors = None
 
+    # Create and return final mesh
     return mesh(all_verts.reshape(-1, 3), face_ids.reshape(-1, 3), color=line_colors)
 
 
-def wireframe(mesh: o3d.geometry.TriangleMesh):
+def wireframe(mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.LineSet:
+    """Convert a triangle mesh to a wireframe representation using line segments.
+
+    This function extracts the edges from a triangle mesh and creates a line set representation.
+    Each edge in the resulting wireframe appears only once, even if it is shared by multiple triangles.
+
+    Args:
+        mesh (o3d.geometry.TriangleMesh): Input triangle mesh to convert to wireframe
+
+    Returns:
+        o3d.geometry.LineSet: Wireframe representation of the input mesh as a line set
+    """
+    # Extract vertex coordinates and triangle indices
     points = np.asarray(mesh.vertices)
     triangles = np.asarray(mesh.triangles)
 
+    # Create edge pairs from triangles by taking pairs of vertices
+    # Each triangle contributes 3 edges: (v0,v1), (v1,v2), (v0,v2)
     wireframe_ids = np.vstack([
         triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [0, 2]]
     ])
+    # Sort vertex indices for each edge to normalize edge direction
     wireframe_ids = np.sort(wireframe_ids, axis=1)
+    # Remove duplicate edges that are shared between triangles
     wireframe_ids = np.unique(wireframe_ids, axis=0)
 
+    # Create and return line set geometry
     geom = o3d.geometry.LineSet(
         points=o3d.utility.Vector3dVector(points),
         lines=o3d.utility.Vector2iVector(wireframe_ids))
@@ -1047,14 +1646,43 @@ def wireframe(mesh: o3d.geometry.TriangleMesh):
     return geom
 
 
-def wireframe_bbox(extent_min=None, extent_max=None,
-                   bbox: BoundingBox = None,
-                   solid=False, tube=False, tube_radius=0.001,
-                   cid: Union[np.ndarray, "torch.Tensor"] = None,
-                   ucid: int = 0, cmap: str = 'tab10',
-                   cfloat: np.ndarray = None, cfloat_cmap: str = 'jet', cfloat_normalize: bool = False,
-                   color: Union[np.ndarray, "torch.Tensor"] = None):
+def wireframe_bbox(extent_min: Optional[Union[List[float], np.ndarray]] = None,
+                   extent_max: Optional[Union[List[float], np.ndarray]] = None,
+                   bbox: Optional[BoundingBox] = None,
+                   solid: bool = False,
+                   tube: bool = False,
+                   tube_radius: float = 0.001,
+                   cid: Optional[Union[np.ndarray, "torch.Tensor"]] = None,
+                   ucid: int = 0,
+                   cmap: str = 'tab10',
+                   cfloat: Optional[np.ndarray] = None,
+                   cfloat_cmap: str = 'jet',
+                   cfloat_normalize: bool = False,
+                   color: Optional[Union[np.ndarray, "torch.Tensor"]] = None):
+    """Create a wireframe or solid visualization of one or more bounding boxes.
 
+    This function creates a visual representation of bounding boxes either from min/max extents
+    or from a BoundingBox object. When from min/max extents, the boxes are assumed axis-aligned.
+
+    Args:
+        extent_min: Minimum coordinates of bounding box(es). Shape (N,3) or (3,)
+        extent_max: Maximum coordinates of bounding box(es). Shape (N,3) or (3,)
+        bbox: BoundingBox object to visualize (alternative to extent_min/max)
+        solid: If True, render as solid mesh. If False, render as wireframe 
+        tube: If True and solid=False, render wireframe as meshes with tubes
+        tube_radius: Radius of tubes when tube=True
+        cid: Integer color indices for each box. Shape (N,)
+        ucid: Default color index if cid not provided
+        cmap: Matplotlib colormap name for cid colors
+        cfloat: Float values for coloring boxes. Shape (N,)
+        cfloat_cmap: Matplotlib colormap name for cfloat values
+        cfloat_normalize: If True, normalize cfloat values to [0,1]
+        color: Direct RGB(A) colors for boxes. Shape (N,3) or (N,4)
+
+    Returns:
+        o3d.geometry.LineSet or o3d.geometry.TriangleMesh: Visual representation of the box(es)
+    """
+    # Create box geometry either from extent bounds or BoundingBox object
     if bbox is None:
         if extent_min is None:
             extent_min = [0.0, 0.0, 0.0]
@@ -1075,6 +1703,7 @@ def wireframe_bbox(extent_min=None, extent_max=None,
         extent_max = ensure_from_torch(extent_max, 2)
         assert extent_min.shape[0] == extent_max.shape[0]
 
+        # Generate box vertices from min/max extents
         min_x, min_y, min_z = extent_min[:, 0], extent_min[:, 1], extent_min[:, 2]
         max_x, max_y, max_z = extent_max[:, 0], extent_max[:, 1], extent_max[:, 2]
         all_points = np.stack([
@@ -1087,6 +1716,7 @@ def wireframe_bbox(extent_min=None, extent_max=None,
         all_points = bbox.vertices
         n_box = 1
 
+    # Process color inputs - only one color specification can be used
     if cid is not None:
         cid = ensure_from_torch(cid, dim=1).astype(int)
         ucid = None
@@ -1099,11 +1729,13 @@ def wireframe_bbox(extent_min=None, extent_max=None,
         color = ensure_from_torch(color)
         ucid = None
 
+    # Create either wireframe or solid geometry
     if not solid:
+        # Define edges connecting box vertices
         line_indices = np.asarray([
-            [0, 1], [2, 3], [4, 5], [6, 7],
-            [0, 4], [1, 5], [2, 6], [3, 7],
-            [0, 2], [4, 6], [1, 3], [5, 7]
+            [0, 1], [2, 3], [4, 5], [6, 7],  # Vertical edges
+            [0, 4], [1, 5], [2, 6], [3, 7],  # Horizontal edges
+            [0, 2], [4, 6], [1, 3], [5, 7]   # Depth edges
         ])
         line_indices = (line_indices[None, ...] + (np.arange(n_box) * 8)[:, None, None]).reshape(-1, 2)
         geom = lineset(
@@ -1120,10 +1752,14 @@ def wireframe_bbox(extent_min=None, extent_max=None,
         if tube:
             geom = lineset_mesh(geom, tube_radius)
     else:
+        # Define triangles for solid box faces
         cube_indices = np.asarray([
-            [0, 4, 5], [0, 5, 1], [4, 6, 7], [4, 7, 5],
-            [2, 7, 6], [2, 3, 7], [0, 3, 2], [0, 1, 3],
-            [7, 1, 5], [3, 1, 7], [2, 6, 0], [0, 6, 4]
+            [0, 4, 5], [0, 5, 1],  # Front face
+            [4, 6, 7], [4, 7, 5],  # Right face
+            [2, 7, 6], [2, 3, 7],  # Back face
+            [0, 3, 2], [0, 1, 3],  # Left face
+            [7, 1, 5], [3, 1, 7],  # Top face
+            [2, 6, 0], [0, 6, 4]   # Bottom face
         ])
         cube_indices = (cube_indices[None, ...] + (np.arange(n_box) * 8)[:, None, None]).reshape(-1, 3)
         geom = mesh(
@@ -1182,27 +1818,49 @@ def merged_entities(merged_list: list):
 
 
 def bbox_from_points(pc: np.ndarray, oriented: bool = True, solid: bool = False, z_correct_angle: float = 0.0):
+    """
+    Create a bounding box from a set of points, either axis-aligned or oriented along principal components.
+
+    Args:
+        pc (np.ndarray): Input point cloud of shape (N, 3) where N is number of points
+        oriented (bool): If True, compute oriented bounding box using PCA. If False, compute axis-aligned box
+        solid (bool): If True, create solid box. If False, create wireframe box
+        z_correct_angle (float): Additional rotation angle in degrees around z-axis to apply to oriented box
+
+    Returns:
+        tuple: (geom, iso) where:
+            - geom (o3d.geometry.LineSet): Line set geometry representing the bounding box
+            - iso (Isometry): Isometry transform from box local coordinates to world coordinates
+    """
+    # Return empty box if not enough points for PCA
     if pc.shape[0] < 5:
         return o3d.geometry.LineSet(), Isometry()
 
+    # Center the point cloud
     pc_mean = np.mean(pc, axis=0)
     pc_centered = pc - pc_mean
 
     if oriented:
+        # Compute oriented box using PCA
         cov = pc_centered.T @ pc_centered
         try:
+            # Get principal components
             u, s, vh = np.linalg.svd(cov)
         except np.linalg.LinAlgError:
             u = np.identity(3)
+        # Ensure right-handed coordinate system
         if np.linalg.det(u) < 0:
             u[:, 2] = -u[:, 2]
+        # Apply additional z-axis rotation if specified
         if z_correct_angle != 0.0:
             u = u @ Quaternion(axis=[0.0, 0.0, 1.0], degrees=z_correct_angle).rotation_matrix
+        # Project points to principal component space
         pc_normal = pc_centered @ u
         extent_min, extent_max = np.min(pc_normal, axis=0), np.max(pc_normal, axis=0)
         geom = wireframe_bbox(extent_min, extent_max, solid)
         iso = Isometry.from_matrix(u, pc_mean)
     else:
+        # Compute axis-aligned bounding box
         extent_min, extent_max = np.min(pc_centered, axis=0), np.max(pc_centered, axis=0)
         geom = wireframe_bbox(extent_min, extent_max, solid)
         iso = Isometry(t=pc_mean)
@@ -1210,39 +1868,87 @@ def bbox_from_points(pc: np.ndarray, oriented: bool = True, solid: bool = False,
     return geom, iso
 
 
-def trajectory(traj1: list, traj2: list = None, ucid: int = -1):
+def trajectory(traj1: List[Union[Isometry, np.ndarray]], 
+              traj2: Optional[List[Union[Isometry, np.ndarray]]] = None, 
+              ucid: int = -1) -> o3d.geometry.LineSet:
+    """Create a line set visualization of one or two trajectories.
+
+    This function visualizes trajectories as connected line segments. It can display either a single
+    trajectory or two trajectories with connecting lines between corresponding points. The trajectories
+    can be specified either as lists of Isometry objects or as lists of 3D points.
+
+    Args:
+        traj1: List of trajectory points, either as Isometry objects or numpy arrays of shape (3,)
+            representing 3D positions
+        traj2: Optional second trajectory to visualize and connect to traj1. Must have same length as
+            traj1 if provided. Default is None.
+        ucid: Integer ID used to assign a unique color from the tab10 colormap. If -1, no color is
+            assigned. Default is -1.
+
+    Returns:
+        o3d.geometry.LineSet: Line set geometry containing:
+            - Connected segments of traj1
+            - Connected segments of traj2 (if provided)
+            - Red lines connecting corresponding points between trajectories (if traj2 provided)
+    """
+    # Extract translation components if trajectories contain Isometry objects
     if len(traj1) > 0 and isinstance(traj1[0], Isometry):
         traj1 = [t.t for t in traj1]
     if traj2 and isinstance(traj2[0], Isometry):
         traj2 = [t.t for t in traj2]
 
+    # Create line set for first trajectory
     traj1_lineset = o3d.geometry.LineSet(points=o3d.utility.Vector3dVector(np.asarray(traj1)),
                                          lines=o3d.utility.Vector2iVector(np.vstack((np.arange(0, len(traj1) - 1),
                                                                                      np.arange(1, len(traj1)))).T))
+    
+    # Apply uniform coloring if ucid specified
     if ucid != -1:
         color_map = np.asarray(matplotlib.cm.get_cmap('tab10').colors)
         traj1_lineset.paint_uniform_color(color_map[ucid % 10])
 
+    # Handle optional second trajectory
     if traj2 is not None:
-        assert len(traj1) == len(traj2)
+        assert len(traj1) == len(traj2), "Trajectories must have equal length"
+        
+        # Create line set for second trajectory
         traj2_lineset = o3d.geometry.LineSet(points=o3d.utility.Vector3dVector(np.asarray(traj2)),
                                              lines=o3d.utility.Vector2iVector(np.vstack((np.arange(0, len(traj2) - 1),
                                                                                          np.arange(1, len(traj2)))).T))
+        
+        # Create red lines connecting corresponding points between trajectories
         traj_diff = o3d.geometry.LineSet(
             points=o3d.utility.Vector3dVector(np.vstack((np.asarray(traj1), np.asarray(traj2)))),
             lines=o3d.utility.Vector2iVector(np.arange(2 * len(traj1)).reshape((2, len(traj1))).T))
         traj_diff.colors = o3d.utility.Vector3dVector(np.array([[1.0, 0.0, 0.0]]).repeat(len(traj_diff.lines), axis=0))
 
+        # Merge all line sets
         traj1_lineset = merged_linesets([traj1_lineset, traj2_lineset, traj_diff])
     return traj1_lineset
 
 
-def grid(direction: str = "XY", size: float = 1.0, count: int = 7):
+def grid(direction: str = "XY", size: float = 1.0, count: int = 7) -> o3d.geometry.LineSet:
+    """Creates a grid of lines in a specified plane.
+
+    Creates a grid of evenly spaced lines in a plane defined by two axes. The grid is centered at the origin
+    and extends size/2 units in each direction along both axes.
+
+    Args:
+        direction (str): Two-character string specifying the plane for the grid ('XY', 'YZ', or 'XZ').
+            Case insensitive. Default is 'XY'.
+        size (float): Total size of the grid in each direction. Default is 1.0.
+        count (int): Number of lines to create in each direction. Default is 7.
+
+    Returns:
+        o3d.geometry.LineSet: Line set geometry representing the grid, colored in gray.
+    """
+    # Dictionary mapping axis labels to array indices
     DIR_DICT = {"X": 0, "x": 0, "Y": 1, "y": 1, "Z": 2, "z": 2}
     dir_x = DIR_DICT[direction[0]]
     dir_y = DIR_DICT[direction[1]]
 
     line_ends = []
+    # Create horizontal lines
     for i in range(count):
         a_start = [0.0, 0.0, 0.0]
         a_end = [0.0, 0.0, 0.0]
@@ -1250,6 +1956,8 @@ def grid(direction: str = "XY", size: float = 1.0, count: int = 7):
         a_end[dir_x] = size / 2.
         a_start[dir_y] = a_end[dir_y] = -size / 2. + size / (count - 1) * i
         line_ends += [a_start, a_end]
+    
+    # Create vertical lines
     for i in range(count):
         b_start = [0.0, 0.0, 0.0]
         b_end = [0.0, 0.0, 0.0]
@@ -1257,9 +1965,12 @@ def grid(direction: str = "XY", size: float = 1.0, count: int = 7):
         b_end[dir_y] = size / 2.
         b_start[dir_x] = b_end[dir_x] = -size / 2. + size / (count - 1) * i
         line_ends += [b_start, b_end]
+    
+    # Convert to numpy array and create line indices
     line_ends = np.asarray(line_ends)
     line_inds = np.arange(len(line_ends)).reshape(-1, 2)
 
+    # Create and return the line set with gray color
     grd_lineset = o3d.geometry.LineSet(
         points=o3d.utility.Vector3dVector(line_ends),
         lines=o3d.utility.Vector2iVector(line_inds))
@@ -1311,21 +2022,45 @@ def show_segmentation_motion_interactive(pc: np.ndarray, segm: np.ndarray, motio
     engine.destroy_window()
 
 
-def depth_pointcloud(depth: np.ndarray, normal: np.ndarray = None, rgb: np.ndarray = None, fx=None, fy=None, cx=None, cy=None, depth_scale=1000.0,
-                     pose: Isometry = Isometry(), compute_normal: bool = False, use_numpy: bool = False, numpy_norm_ray: bool = False):
+def depth_pointcloud(depth: np.ndarray, normal: np.ndarray = None, rgb: np.ndarray = None, fx: float = None, fy: float = None, 
+                     cx: float = None, cy: float = None, depth_scale: float = 1000.0, pose: Isometry = Isometry(), 
+                     compute_normal: bool = False, use_numpy: bool = False, numpy_norm_ray: bool = False):
+    """Convert a depth image to a point cloud with optional normal and color information.
+
+    Args:
+        depth (np.ndarray): Input depth image of shape (H,W)
+        normal (np.ndarray, optional): Input normal map of shape (H,W,3). Only used when use_numpy=True
+        rgb (np.ndarray, optional): Input RGB image of shape (H,W,3)
+        fx (float, optional): Focal length in x direction. If None, assumes 90 degree FOV
+        fy (float, optional): Focal length in y direction. If None, assumes 90 degree FOV
+        cx (float, optional): Principal point x coordinate. If None, uses image center
+        cy (float, optional): Principal point y coordinate. If None, uses image center
+        depth_scale (float, optional): Scale factor to convert depth values. Applied if depth is uint16 type
+        pose (Isometry, optional): Camera pose transformation to apply to point cloud
+        compute_normal (bool, optional): Whether to compute normals if not provided. Default False
+        use_numpy (bool, optional): Whether to use numpy implementation instead of Open3D. Default False
+        numpy_norm_ray (bool, optional): Whether to normalize ray directions in numpy implementation. Default False
+
+    Returns:
+        o3d.geometry.PointCloud: Resulting point cloud with optional normals and colors
+    """
     img_h, img_w = depth.shape
+
+    # Convert depth to float32 meters if needed
     if depth.dtype == np.uint16:
         depth = depth.astype(np.float32) / depth_scale
 
     if depth.dtype == float:
         depth = depth.astype(np.float32)
 
+    # Validate normal input
     if normal is not None:
         assert use_numpy, "You have to set use_numpy=True to ensure a correct building"
         if compute_normal:
             print("Warning: re-computing normals even if it's provided...")
         assert normal.shape[0] == img_h and normal.shape[1] == img_w and normal.shape[2] == 3
 
+    # Set default intrinsics if not provided
     if cx is None or cy is None:
         cx = img_w / 2
         cy = img_h / 2
@@ -1334,7 +2069,7 @@ def depth_pointcloud(depth: np.ndarray, normal: np.ndarray = None, rgb: np.ndarr
         fx = fy = cx        # Assume 90 degrees fovx.
 
     if use_numpy:
-        # Used also for future reference.
+        # Create pixel coordinate grid and unproject to 3D rays
         xx, yy = np.meshgrid(np.arange(0, img_w), np.arange(0, img_h))
         mg = np.concatenate((xx.reshape(1, -1), yy.reshape(1, -1)), axis=0)
         mg_homo = np.vstack((mg, np.ones((1, mg.shape[1]))))
@@ -1345,7 +2080,8 @@ def depth_pointcloud(depth: np.ndarray, normal: np.ndarray = None, rgb: np.ndarr
             pc /= np.linalg.norm(pc, axis=0)
         depth_flat = depth.ravel()
         pc = depth_flat[np.newaxis, :] * pc
-        # Crop invalid observations.
+        
+        # Filter out invalid points (zero or infinite depth)
         pc_mask = np.logical_and(np.isfinite(depth_flat), depth_flat > 0.0)
         pc = pc[:, pc_mask].T
         if rgb is not None:
@@ -1355,6 +2091,7 @@ def depth_pointcloud(depth: np.ndarray, normal: np.ndarray = None, rgb: np.ndarr
         pcd = pointcloud(pc, color=rgb, normal=normal)
         pcd.transform(pose.matrix)
     else:
+        # Use Open3D implementation
         intrinsic = o3d.camera.PinholeCameraIntrinsic()
         intrinsic.set_intrinsics(width=img_w, height=img_h, fx=fx, fy=fy, cx=cx, cy=cy)
         depth = o3d.geometry.Image(depth)
@@ -1367,6 +2104,7 @@ def depth_pointcloud(depth: np.ndarray, normal: np.ndarray = None, rgb: np.ndarr
         else:
             pcd = o3d.geometry.PointCloud.create_from_depth_image(depth, intrinsic, pose.inv().matrix)
 
+    # Compute normals if requested
     if compute_normal:
         pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=16))
         pcd.orient_normals_towards_camera_location(pose.t)
@@ -1374,15 +2112,40 @@ def depth_pointcloud(depth: np.ndarray, normal: np.ndarray = None, rgb: np.ndarr
     return pcd
 
 
-def colored_triangle_soup(mesh: o3d.geometry.TriangleMesh, color: np.ndarray):
+def colored_triangle_soup(mesh: o3d.geometry.TriangleMesh, color: np.ndarray) -> o3d.geometry.TriangleMesh:
+    """Create a triangle mesh where each face has a unique color by duplicating vertices.
+    
+    This function converts a triangle mesh with per-face colors into a new mesh where each
+    triangle has its own set of vertices, allowing for sharp color boundaries between faces.
+    This is useful for visualization where you want distinct colors per face without color
+    interpolation.
+
+    Args:
+        mesh: o3d.geometry.TriangleMesh
+            Input triangle mesh
+        color: np.ndarray
+            Array of shape (N,3) containing RGB colors for each face,
+            where N matches the number of triangles in the mesh
+
+    Returns:
+        o3d.geometry.TriangleMesh:
+            New triangle mesh with duplicated vertices allowing per-face colors
+    """
+    # Verify color array matches number of faces
     assert len(mesh.triangles) == color.shape[0]
 
+    # Get face indices and vertex positions
     faces = np.asarray(mesh.triangles)
     xyz = np.asarray(mesh.vertices)
 
+    # Create new vertices by duplicating each vertex used by each face
     soup_xyz = xyz[faces.ravel()]
+    # Create new face indices pointing to the duplicated vertices
     soup_faces = np.arange(soup_xyz.shape[0]).reshape(-1, 3)
+    # Duplicate colors for each vertex of each face
     soup_colors = np.tile(np.expand_dims(color, 1), [1, 3, 1]).reshape(-1, 3)
+    
+    # Create new mesh with duplicated geometry
     soup = o3d.geometry.TriangleMesh()
     soup.vertices = o3d.utility.Vector3dVector(soup_xyz)
     soup.vertex_colors = o3d.utility.Vector3dVector(soup_colors)
@@ -1391,8 +2154,34 @@ def colored_triangle_soup(mesh: o3d.geometry.TriangleMesh, color: np.ndarray):
     return soup
 
 
-def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures: bool = True,
-              multipart_force_merge: bool = True):
+def from_file(path: Union[str, Path], compute_normal: bool = True, load_obj_textures: bool = True,
+              multipart_force_merge: bool = True) -> Union[o3d.geometry.TriangleMesh, o3d.geometry.PointCloud, List[o3d.geometry.TriangleMesh]]:
+    """Load 3D geometry data from various file formats into Open3D objects.
+
+    This function supports loading multiple 3D file formats including point clouds, meshes, and textured models.
+    It handles different file extensions and formats appropriately, converting them into Open3D geometry objects.
+
+    Args:
+        path: Union[str, Path]
+            Path to the input 3D geometry file
+        compute_normal: bool, optional
+            Whether to compute vertex normals for mesh geometry. Default is True.
+        load_obj_textures: bool, optional
+            For OBJ/GLB files, if True, return a list of TriangleMesh objects, each with its own texture.
+        multipart_force_merge: bool, optional
+            For OBJ/GLB files with multiple parts, whether to merge them into a single mesh.
+            Default is True.
+
+    Returns:
+        Union[o3d.geometry.TriangleMesh, o3d.geometry.PointCloud, List[o3d.geometry.TriangleMesh]]:
+            - For point cloud formats: Returns Open3D PointCloud
+            - For mesh formats: Returns Open3D TriangleMesh
+            - For textured OBJ/GLB with load_obj_textures=True: Returns list of TriangleMesh if multiple parts exist
+            
+    Raises:
+        FileNotFoundError: If input file does not exist
+        NotImplementedError: If file format is not supported
+    """
     if not isinstance(path, Path):
         path = Path(path)
     if not path.exists():
@@ -1493,12 +2282,7 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
         # Determine filetype by peaking into ply header
         with path.open("rb") as f:
             header_data = PlyData._parse_header(f)
-        # ply_data = PlyData.read(temp_dir / "out.ply")
-        # tri = np.vstack(ply_data['face'].data['vertex_indices'])
-        # vx = np.asarray(ply_data['vertex'].data['x'])
-        # vy = np.asarray(ply_data['vertex'].data['y'])
-        # vz = np.asarray(ply_data['vertex'].data['z'])
-        # vw = np.asarray(ply_data['vertex'].data['value'])
+        # Check if file contains faces to determine if it's a mesh or point cloud
         element_keys = [t.name for t in header_data]
         if 'face' in element_keys and header_data['face'].count > 0:
             geom = o3d.io.read_triangle_mesh(str(path))
@@ -1518,6 +2302,7 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
     else:
         raise NotImplementedError(f"Un-recognized file type {suffix}.")
 
+    # Compute normals if requested and applicable
     if isinstance(geom, o3d.geometry.TriangleMesh):
         if compute_normal: # and not geom.has_vertex_normals():
             geom.compute_vertex_normals()
@@ -1529,18 +2314,37 @@ def from_file(path: str or Path, compute_normal: bool = True, load_obj_textures:
 
     return geom
 
+def to_file(geom: Union[o3d.geometry.PointCloud, o3d.geometry.TriangleMesh], path: Union[str, Path]) -> None:
+    """Save an Open3D geometry object to a file.
 
-def to_file(geom, path: str or Path):
-    # A handy function
+    This function saves point clouds or triangle meshes to various file formats.
+    For USD files, it creates a scene and exports the geometry.
+    For other formats, it uses Open3D's built-in writers.
+
+    Args:
+        geom: Open3D geometry object to save. Must be either a PointCloud or TriangleMesh.
+        path: Output file path as string or Path object. Parent directories will be created
+            if they don't exist.
+
+    Returns:
+        None, except for USD files where it returns the result of scene.export()
+
+    Raises:
+        NotImplementedError: If geometry type is not supported
+    """
+    # Convert path to Path object for consistent handling
     path = Path(path)
+    # Create parent directories if needed
     if not path.parent.exists():
         path.parent.mkdir(parents=True)
 
+    # Handle USD files specially using Scene
     if path.suffix.startswith('.usd'):
         import pycg.render as render
         scene = render.Scene().add_object(geom, name=path.stem)
         return scene.export(path, geometry_only=True)
 
+    # Use appropriate Open3D writer based on geometry type
     if isinstance(geom, o3d.geometry.PointCloud):
         o3d.io.write_point_cloud(str(path), geom)
     elif isinstance(geom, o3d.geometry.TriangleMesh):
