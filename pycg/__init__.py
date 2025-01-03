@@ -9,7 +9,7 @@ from .isometry import Isometry, ScaledIsometry
 
 __author__ = "Jiahui Huang"
 __license__ = "MIT"
-__version__ = '0.10.0'
+__version__ = '0.10.1'
 
 __all__ = ["Isometry", "ScaledIsometry"]
 
