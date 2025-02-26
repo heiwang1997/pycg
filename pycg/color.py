@@ -6,7 +6,7 @@ Please see the LICENSE file that should have been included as part of this packa
 
 from typing import Union, List
 import matplotlib.colors
-import matplotlib.cm
+from matplotlib import colormaps
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -169,7 +169,7 @@ def get_cmap_array(cmap: str):
     if cmap in ADDITIONAL_CMAPS.keys():
         color_map = ADDITIONAL_CMAPS[cmap]
     else:
-        color_map = np.asarray(matplotlib.cm.get_cmap(cmap).colors)
+        color_map = np.asarray(colormaps.get_cmap(cmap).colors)
 
     if cmap_processor is not None:
         if cmap_processor == "shuffle":

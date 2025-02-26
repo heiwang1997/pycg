@@ -1,4 +1,4 @@
-from open3d.visualization import gui
+from pycg import o3d
 
 from pycg import render, vis
 from pycg.isometry import Isometry
@@ -38,7 +38,7 @@ if __name__ == '__main__':
     vis_manager.add_scene(scene)
     vis_manager.build_engines(use_new_api=True)
     scene_window = vis_manager.get_scene_engine(scene)
-    scene_window.mouse_mode = gui.SceneWidget.Controls.PICK_GEOMETRY
+    scene_window.mouse_mode = o3d.visualization.gui.SceneWidget.Controls.PICK_GEOMETRY
 
     # Event loop combining matplotlib and open3d
     last_selected_name = ""

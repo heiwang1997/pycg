@@ -152,7 +152,7 @@ def ensure_from_torch(arr: Union[torch.Tensor, list, np.ndarray], dim: int = 2, 
         AssertionError: If input tensor dimensions don't match expected dimensions
     """
     # Handle PyTorch tensor conversion
-    if hasattr(arr, "device"):
+    if hasattr(arr, "detach"):
         if remove_batch_dim:
             # Check dimensions accounting for optional batch dim
             assert dim <= arr.ndim <= dim + 1, f"Torch tensor has dimension {arr.ndim} which is incorrect!"

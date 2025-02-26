@@ -659,7 +659,7 @@ class Isometry:
                 return other
             return other.transform(self.matrix)
         
-        if hasattr(other, "device"):  # Torch tensor
+        if hasattr(other, "detach"):  # Torch tensor
             th_R, th_t = self.torch_matrices(other.device)
             assert other.size(-1) == 3
             res = other.view(-1, 3) @ th_R.t() + th_t.unsqueeze(0)
