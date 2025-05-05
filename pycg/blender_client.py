@@ -13,7 +13,6 @@ import os, shutil
 import numpy as np
 from pycg.isometry import Isometry
 from pycg.exp import logger
-from pycg import o3d
 from pyquaternion import Quaternion
 from multiprocessing.managers import BaseManager
 
@@ -238,6 +237,9 @@ def send_entity(geom, uuidx: str = None, pose: Isometry = None, attributes=None)
         info_dict['uuid'] = uuidx
     info_dict['attributes'] = attributes
 
+    
+    from pycg import o3d
+    
     # point cloud
     if isinstance(geom, o3d.geometry.PointCloud):
         xyz = np.asarray(geom.points).astype(np.float32)
