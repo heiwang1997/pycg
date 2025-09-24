@@ -1,6 +1,6 @@
 from pycg.exp import logger
 
-O3D_INSTRUCTION = "pip install open3d_pycg_cpu -f https://pycg.huangjh.tech/packages/index.html"
+O3D_INSTRUCTION = "pip install -U python-pycg[all]"
 
 try:
     from open3d_pycg import *

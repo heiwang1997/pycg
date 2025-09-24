@@ -9,7 +9,6 @@ from pycg import o3d
 import matplotlib.colors
 import matplotlib.cm
 import math
-import torch
 
 from pycg.isometry import Isometry, BoundingBox
 from pycg.color import map_quantized_color
@@ -133,7 +132,7 @@ def convert_from_pickable(geom_obj: dict):
     return geom
 
 
-def ensure_from_torch(arr: Union[torch.Tensor, list, np.ndarray], dim: int = 2, remove_batch_dim: bool = True):
+def ensure_from_torch(arr: Union["torch.Tensor", list, np.ndarray], dim: int = 2, remove_batch_dim: bool = True):
     """Convert input array to numpy array with specified dimensions.
     
     This function handles conversion of PyTorch tensors, lists, and numpy arrays to a numpy array
