@@ -1,3 +1,55 @@
 [build-system]
-requires = ["setuptools>=42"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "python-pycg"
+dynamic = ["version"]
+description = "PyCG: Toolbox for CG-related visualizations and computations"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Jiahui Huang", email = "huangjh.work@outlook.com"}
+]
+keywords = ["pycg", "graphics", "3d", "visualization"]
+classifiers = [
+    "Operating System :: Unix",
+    "Topic :: Multimedia :: Graphics",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only"
+]
+requires-python = ">=3.6"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "pyquaternion",
+    "pyyaml",
+    "omegaconf",
+    "tqdm",
+    "pynvml",
+    "calmsize",
+    "rich",
+    "plyfile",
+    "trimesh",
+    "imageio",
+    "screeninfo",
+    "pillow",
+    "usd-core",
+    "scipy"
+]
+
+[project.optional-dependencies]
+all = ["open3d_pycg_cpu"]
+
+[project.urls]
+Homepage = "https://github.com/heiwang1997/pycg"
+Repository = "https://github.com/heiwang1997/pycg"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+# No additional configuration needed - setuptools will find packages automatically
+
+[tool.setuptools.dynamic]
+version = {attr = "pycg.__version__"}

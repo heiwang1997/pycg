@@ -4,7 +4,7 @@
 
 - For projects / enviroments that would modify / develop pycg, use `develop`:
 ```shell
-python setup.py develop
+pip install -e .[all]
 ```
 
 - For other projects / environments, just install it and occasionally upgrade it for newest features.

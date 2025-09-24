@@ -9,25 +9,13 @@ The toolbox is created from the perspective of researchers and would hopefully a
 ## Install
 
 ```shell
-pip install -U python-pycg
+pip install -U python-pycg[all]
 ```
-
-**DONT READ MORE!!!!!! DONT READ MORE!!!! STOP NOW!!!!**
-
-HAHA. Actually I really want you to read this -- to install a full-fledged version, use:
-```bash
-pip install -U python-pycg[all] -f https://pycg.huangjh.tech/packages/index.html
-```
-
-> Note that the need for the extra index URL if for our [customized version of Open3D, `named open3d_pycg_cpu`](https://github.com/heiwang1997/Open3D) (with support for multi-window camera/light synchronization, animation maker and visualizer, scalar analyzer, etc).
 
 For developers, clone this repository and install it if you want to use newest features:
 ```shell
 git clone --recursive https://github.com/heiwang1997/pycg
-pip install open3d_pycg_cpu -f https://pycg.huangjh.tech/packages/index.html
-pip install -e .[all]      # Most modern, but some static analyzing tool (e.g. pylance) will fail!
-                            #   Now it will create weird __editable__.*.pth files!
-python setup.py develop     # Deprecated by the community, but it works better.
+pip install -e .[all]
 ```
 
 ## Using PyCG

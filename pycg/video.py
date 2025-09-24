@@ -44,6 +44,9 @@ def make_video_xw264(input_format: str, output_path: str, fps: int = None, crf: 
         elif len(list(input_format.glob("*.jpg"))) > 0:
             input_format = input_format / "*.jpg"
             input_suffix = ".jpg"
+        elif len(list(input_format.glob("*.JPG"))) > 0:
+            input_format = input_format / "*.JPG"
+            input_suffix = ".JPG"
         else:
             raise ValueError(f"Cannot find any image files in {input_format}.")
 
