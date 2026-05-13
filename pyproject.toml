@@ -26,7 +26,7 @@ dependencies = [
     "pyyaml",
     "omegaconf",
     "tqdm",
-    "pynvml",
+    "nvidia-ml-py",
     "calmsize",
     "rich",
     "plyfile",
