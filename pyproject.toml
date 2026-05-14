@@ -51,5 +51,8 @@ include-package-data = true
 [tool.setuptools.packages.find]
 # No additional configuration needed - setuptools will find packages automatically
 
+[tool.setuptools.package-data]
+pycg = ["py.typed"]
+
 [tool.setuptools.dynamic]
 version = {attr = "pycg.__version__"}
